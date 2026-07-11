@@ -574,10 +574,7 @@ async function extractOOOI(dataUrls){
     source:{type:'base64',media_type:'image/jpeg',data:u.split(',')[1]}
   }));
   content.push({type:'text',text:
-'These are '+dataUrls.length+' photo(s) of Airbus OOOI displays, ACARS printouts, or journey logs. Extract EVERY flight leg visible across ALL photos. If the same leg appears in two photos, include it only once.\n\n'+
-'Respond with ONLY valid JSON, no markdown fences, no commentary:\n'+
-'{"flights":[{"date":"YYYY-MM-DD or null","flight_number":"e.g. TS110 or null","registration":"e.g. C-GOIH or null","from":"airport code or null","to":"airport code or null","out":"HHMM","off":"HHMM","on":"HHMM","in":"HHMM"}]}\n\n'+
-'List the legs in chronological order. Times are UTC, 4 digits (e.g. "1432"). Use null for anything unreadable. OUT = doors closed/blocks off, OFF = takeoff, ON = landing, IN = blocks on.'});
+'These are '+dataUrls.length+' photo(s) of the Airbus MCDU "AOC OOOI STATUS" page (or similar ACARS printouts). The page shows: FLIGHT ID (e.g. TS0440), ORIG/DEST as ICAO pair (e.g. CYUL/CYYZ), DATE (e.g. 02JUL26), and four Z-suffixed UTC times in a two-column layout: OUT and OFF on one row, IN and ON below. It also shows BLOCK and FLIGHT durations - do NOT confuse these durations with the OOOI times. Ignore the RETURN/UTC clock line and any radio frequencies.\n\nExtract EVERY flight leg visible across ALL photos. If the same leg appears in two photos, include it only once.\n\nRespond with ONLY valid JSON, no markdown fences, no commentary:\n{"flights":[{"date":"YYYY-MM-DD or null","flight_number":"e.g. TS0440 or null","registration":"e.g. C-GOIH or null","from":"ICAO code or null","to":"ICAO code or null","out":"HHMM","off":"HHMM","on":"HHMM","in":"HHMM"}]}\n\nList legs in chronological order. Times as 4 digits without the Z (e.g. "2014"). Use null for anything unreadable. Sanity check each leg: IN minus OUT should equal the BLOCK duration shown, and ON minus OFF should equal the FLIGHT duration shown.'});
   let resp;
   try{
     resp = await fetch('https://api.anthropic.com/v1/messages',{
@@ -616,60 +613,87 @@ async function extractOOOI(dataUrls){
   }));
 }
 
-/* ================= LOCAL TEXT PARSER (free, no API) ================= */
+/* ================= LOCAL TEXT PARSER (free, no API) =================
+   Tuned to the Airbus MCDU "AOC OOOI STATUS" page. Robust to Live Text
+   reading the two-column layout in either order (FIFO label matching). */
 function parseOOOIText(raw){
-  const T=' '+String(raw||'').toUpperCase()+' ';
-  function findAll(lbl){
-    const re=new RegExp('\\b'+lbl+'\\b\\W{0,6}(\\d{1,2}:?\\d{2})\\b','g');
-    const out=[]; let m;
-    while((m=re.exec(T))) out.push({t:m[1].replace(':','').padStart(4,'0'), i:m.index});
-    return out;
+  const T=String(raw||'').toUpperCase();
+  let blocks;
+  const pageSplits=[...T.matchAll(/OOOI\s+STATUS/g)].map(m=>m.index);
+  if(pageSplits.length>1){
+    blocks=pageSplits.map((p,i)=>T.slice(p, i+1<pageSplits.length?pageSplits[i+1]:T.length));
+  }else{
+    blocks=[T];
   }
-  const outs=findAll('OUT'), offs=findAll('OFF'), ons=findAll('ON'), ins=findAll('IN');
-  const n=Math.min(10, Math.max(outs.length, ins.length, offs.length, ons.length));
-  if(!n) return [];
-  const anchors=(outs.length?outs:ins).map(x=>x.i);
   const MONTHS={JAN:'01',FEB:'02',MAR:'03',APR:'04',MAY:'05',JUN:'06',JUL:'07',AUG:'08',SEP:'09',OCT:'10',NOV:'11',DEC:'12'};
   const legs=[];
-  for(let k=0;k<n;k++){
-    const bStart = k===0 ? 0 : Math.floor((anchors[k-1]+anchors[k])/2);
-    const bEnd   = (k+1<anchors.length) ? Math.floor((anchors[k]+anchors[k+1])/2) : T.length;
-    const B=T.slice(bStart,bEnd);
+  for(const B of blocks){
+    // Tokenize labels + 4-digit times in position order.
+    // FIFO: each time is assigned to the oldest pending label.
+    // BLOCK / FLIGHT / UTC are decoys that absorb their own values.
+    const toks=[];
+    const labRe=/\b(OUT|OFF|ON|IN|BLOCK|FLIGHT|UTC)\b(\s+ID\b)?/g;
+    let m;
+    while((m=labRe.exec(B))){
+      if(m[1]==='FLIGHT' && m[2]) continue; // "FLIGHT ID" header
+      toks.push({kind:'lab', lab:m[1], i:m.index});
+    }
+    const timeRe=/\b(\d{4})Z?\b/g;
+    while((m=timeRe.exec(B))){
+      const h=+m[1].slice(0,2), mm=+m[1].slice(2);
+      if(h>23||mm>59) continue;
+      toks.push({kind:'time', t:m[1], i:m.index});
+    }
+    toks.sort((a,b)=>a.i-b.i);
+    const pending=[], got={};
+    for(const tk of toks){
+      if(tk.kind==='lab'){ pending.push(tk.lab); }
+      else{
+        const lab=pending.shift();
+        if(lab && got[lab]===undefined) got[lab]=tk.t;
+      }
+    }
+    if(!got.OUT && !got.IN && !got.OFF && !got.ON) continue;
+
     let flt='';
-    let m=B.match(/\bFLT\W{0,4}([A-Z]{0,3}\s?\d{1,4}[A-Z]?)\b/);
+    m=B.match(/FLIGHT\s+ID[\s\S]{0,30}?\b([A-Z]{2,3}\s?\d{2,4}[A-Z]?)\b/);
     if(m) flt=m[1].replace(/\s/g,'');
-    else { m=B.match(/\b([A-Z]{2}\s?\d{3,4})\b/); if(m) flt=m[1].replace(/\s/g,''); }
+    else{ m=B.match(/\b([A-Z]{2}\s?\d{3,4})\b/); if(m) flt=m[1].replace(/\s/g,''); }
+
+    let from='',to='';
+    for(const pm of B.matchAll(/\b([A-Z]{4})\s*\/\s*([A-Z]{4})\b/g)){
+      if(pm[1]==='ORIG'||pm[2]==='DEST') continue;
+      from=pm[1]; to=pm[2]; break;
+    }
+
     let reg='';
     m=B.match(/\b([A-Z]{1,2}-[A-Z]{2,5})\b/);
     if(m) reg=m[1];
-    let from='',to='';
-    m=B.match(/\b(?:FROM|DEP|ORIG|ORIGIN)\W{0,4}([A-Z]{3,4})\b/);
-    if(m) from=m[1];
-    m=B.match(/\b(?:DEST|ARR|TO)\W{0,4}([A-Z]{3,4})\b/);
-    if(m && m[1]!=='OFF' && m[1]!=='OUT') to=m[1];
-    if(!from||!to){
-      m=B.match(/\b([A-Z]{4})\s*[\/\-]\s*([A-Z]{4})\b/) || B.match(/\b([A-Z]{3})\s*[\/\-]\s*([A-Z]{3})\b/);
-      if(m){ from=from||m[1]; to=to||m[2]; }
-    }
+
     let date='';
-    m=B.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
-    if(m) date=m[0];
-    else{
-      m=B.match(/\b(\d{1,2})\s?(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s?(\d{2,4})?\b/);
-      if(m){
-        let y=m[3]||String(new Date().getFullYear());
-        if(y.length===2) y='20'+y;
-        date=y+'-'+MONTHS[m[2]]+'-'+m[1].padStart(2,'0');
-      }
+    m=B.match(/\b(\d{1,2})\s?(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s?(\d{2,4})?\b/);
+    if(m){
+      let y=m[3]||String(new Date().getFullYear());
+      if(y.length===2) y='20'+y;
+      date=y+'-'+MONTHS[m[2]]+'-'+m[1].padStart(2,'0');
+    }else{
+      m=B.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
+      if(m) date=m[0];
     }
     if(!date) date=new Date().toISOString().slice(0,10);
-    legs.push({
-      date, flt, reg, type:settings.type||'',
+
+    // Cross-check computed block vs the BLOCK shown on the MCDU
+    let remarks='';
+    if(got.BLOCK && got.OUT && got.IN){
+      const calc=diffMin(got.OUT, got.IN);
+      const shown=(+got.BLOCK.slice(0,2))*60 + (+got.BLOCK.slice(2));
+      if(calc!=null && calc!==shown) remarks='CHECK TIMES: MCDU BLOCK '+got.BLOCK;
+    }
+
+    legs.push({date, flt, reg, type:settings.type||'',
       from, to,
-      out: outs[k]?outs[k].t:'', off: offs[k]?offs[k].t:'',
-      on:  ons[k] ?ons[k].t :'', inn: ins[k] ?ins[k].t :'',
-      ldg:1, night:'', role:'PF', remarks:''
-    });
+      out:got.OUT||'', off:got.OFF||'', on:got.ON||'', inn:got.IN||'',
+      ldg:1, night:'', role:'PF', remarks});
   }
   return legs;
 }
