@@ -4,6 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>OOOI LOG</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" type="image/png" href="./apple-touch-icon.png">
+<meta name="theme-color" content="#0b0e12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="OOOI Log">
 <style>
   /* ============ COCKPIT TOKENS ============ */
   :root{
@@ -85,6 +93,12 @@
   .droppad .big{font-family:var(--mono);color:var(--cyn);font-size:14px;letter-spacing:2px;margin-bottom:8px}
   .droppad .sub{font-size:12px;line-height:1.5}
   #camIn,#camLive{display:none}
+  #pasteText{
+    width:100%;height:120px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:8px;color:var(--grn);font-family:var(--mono);font-size:13px;
+    padding:10px;resize:vertical;
+  }
+  #pasteText:focus{outline:none;border-color:var(--cyn)}
 
   .preview{margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
   .preview img{width:100%;border-radius:8px;border:1px solid var(--line);display:block}
@@ -278,6 +292,12 @@
     </div>
     <input type="file" id="camLive" accept="image/*" capture="environment">
     <input type="file" id="camIn" accept="image/*" multiple>
+    <button class="btn ghost" id="pasteTextBtn">PASTE PRINTOUT TEXT &mdash; FREE, NO API</button>
+    <div id="pasteArea" style="display:none">
+      <div class="note" style="margin:10px 2px 6px">iPhone: point the camera at the printout, tap the text, Select All &rarr; Copy, then paste below.</div>
+      <textarea id="pasteText" placeholder="FLT TS110  CYUL/LFPG&#10;OUT 2210 OFF 2225 ON 0555 IN 0603" spellcheck="false"></textarea>
+      <button class="btn cyan" id="parseTextBtn">PARSE TEXT</button>
+    </div>
     <div class="preview" id="preview" style="display:none"></div>
     <button class="btn" id="readBtn" style="display:none">READ&nbsp;OOOI</button>
     <button class="btn ghost" id="clearBtn" style="display:none">CLEAR PHOTOS</button>
@@ -595,6 +615,83 @@ async function extractOOOI(dataUrls){
     ldg: 1, night: '', role:'PF', remarks:''
   }));
 }
+
+/* ================= LOCAL TEXT PARSER (free, no API) ================= */
+function parseOOOIText(raw){
+  const T=' '+String(raw||'').toUpperCase()+' ';
+  function findAll(lbl){
+    const re=new RegExp('\\b'+lbl+'\\b\\W{0,6}(\\d{1,2}:?\\d{2})\\b','g');
+    const out=[]; let m;
+    while((m=re.exec(T))) out.push({t:m[1].replace(':','').padStart(4,'0'), i:m.index});
+    return out;
+  }
+  const outs=findAll('OUT'), offs=findAll('OFF'), ons=findAll('ON'), ins=findAll('IN');
+  const n=Math.min(10, Math.max(outs.length, ins.length, offs.length, ons.length));
+  if(!n) return [];
+  const anchors=(outs.length?outs:ins).map(x=>x.i);
+  const MONTHS={JAN:'01',FEB:'02',MAR:'03',APR:'04',MAY:'05',JUN:'06',JUL:'07',AUG:'08',SEP:'09',OCT:'10',NOV:'11',DEC:'12'};
+  const legs=[];
+  for(let k=0;k<n;k++){
+    const bStart = k===0 ? 0 : Math.floor((anchors[k-1]+anchors[k])/2);
+    const bEnd   = (k+1<anchors.length) ? Math.floor((anchors[k]+anchors[k+1])/2) : T.length;
+    const B=T.slice(bStart,bEnd);
+    let flt='';
+    let m=B.match(/\bFLT\W{0,4}([A-Z]{0,3}\s?\d{1,4}[A-Z]?)\b/);
+    if(m) flt=m[1].replace(/\s/g,'');
+    else { m=B.match(/\b([A-Z]{2}\s?\d{3,4})\b/); if(m) flt=m[1].replace(/\s/g,''); }
+    let reg='';
+    m=B.match(/\b([A-Z]{1,2}-[A-Z]{2,5})\b/);
+    if(m) reg=m[1];
+    let from='',to='';
+    m=B.match(/\b(?:FROM|DEP|ORIG|ORIGIN)\W{0,4}([A-Z]{3,4})\b/);
+    if(m) from=m[1];
+    m=B.match(/\b(?:DEST|ARR|TO)\W{0,4}([A-Z]{3,4})\b/);
+    if(m && m[1]!=='OFF' && m[1]!=='OUT') to=m[1];
+    if(!from||!to){
+      m=B.match(/\b([A-Z]{4})\s*[\/\-]\s*([A-Z]{4})\b/) || B.match(/\b([A-Z]{3})\s*[\/\-]\s*([A-Z]{3})\b/);
+      if(m){ from=from||m[1]; to=to||m[2]; }
+    }
+    let date='';
+    m=B.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
+    if(m) date=m[0];
+    else{
+      m=B.match(/\b(\d{1,2})\s?(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s?(\d{2,4})?\b/);
+      if(m){
+        let y=m[3]||String(new Date().getFullYear());
+        if(y.length===2) y='20'+y;
+        date=y+'-'+MONTHS[m[2]]+'-'+m[1].padStart(2,'0');
+      }
+    }
+    if(!date) date=new Date().toISOString().slice(0,10);
+    legs.push({
+      date, flt, reg, type:settings.type||'',
+      from, to,
+      out: outs[k]?outs[k].t:'', off: offs[k]?offs[k].t:'',
+      on:  ons[k] ?ons[k].t :'', inn: ins[k] ?ins[k].t :'',
+      ldg:1, night:'', role:'PF', remarks:''
+    });
+  }
+  return legs;
+}
+
+const pasteArea=document.getElementById('pasteArea'),
+      pasteText=document.getElementById('pasteText');
+document.getElementById('pasteTextBtn').onclick=()=>{
+  pasteArea.style.display = pasteArea.style.display==='none' ? 'block' : 'none';
+  if(pasteArea.style.display==='block') pasteText.focus();
+};
+document.getElementById('parseTextBtn').onclick=()=>{
+  const legs=parseOOOIText(pasteText.value);
+  if(!legs.length){
+    status('NO OOOI TIMES FOUND IN TEXT - needs OUT/OFF/ON/IN labels with times.', true);
+    return;
+  }
+  pendingLegs=legs;
+  renderReview();
+  pasteArea.style.display='none';
+  pasteText.value='';
+  status('');
+};
 
 /* ================= REVIEW TICKET ================= */
 function renderReview(){
