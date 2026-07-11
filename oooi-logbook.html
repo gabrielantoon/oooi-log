@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>OOOI LOG</title>
+<style>
+  /* ============ COCKPIT TOKENS ============ */
+  :root{
+    --bg:#0b0e12;          /* flight deck at night */
+    --panel:#141920;       /* DU bezel */
+    --panel2:#0f1319;
+    --line:#232b35;
+    --grn:#52e08c;         /* MCDU green - confirmed data */
+    --cyn:#4cc9e8;         /* cyan - labels / actions */
+    --amb:#f2b33d;         /* amber - needs attention / editable */
+    --wht:#e8edf2;
+    --dim:#7d8894;
+    --red:#f2635a;
+    --mono:'B612 Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    --body:'B612', -apple-system, 'Segoe UI', sans-serif;
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    background:var(--bg);
+    color:var(--wht);
+    font-family:var(--body);
+    font-size:15px;
+    max-width:560px;
+    margin:0 auto;
+    padding-bottom:90px;
+  }
+
+  /* ============ HEADER (FMA style) ============ */
+  header{
+    padding:16px 16px 10px;
+    border-bottom:1px solid var(--line);
+    display:flex;justify-content:space-between;align-items:flex-end;
+  }
+  header h1{
+    font-family:var(--mono);
+    font-size:20px;letter-spacing:4px;color:var(--grn);
+    font-weight:700;
+  }
+  header h1 span{color:var(--dim);font-size:11px;letter-spacing:2px;display:block;margin-top:2px;font-weight:400}
+  .fma{
+    font-family:var(--mono);text-align:right;
+  }
+  .fma .val{color:var(--grn);font-size:18px;font-weight:700}
+  .fma .lbl{color:var(--cyn);font-size:10px;letter-spacing:1px}
+
+  /* ============ TABS ============ */
+  nav{
+    position:fixed;bottom:0;left:50%;transform:translateX(-50%);
+    width:100%;max-width:560px;
+    display:flex;background:var(--panel);
+    border-top:1px solid var(--line);
+    z-index:50;
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  nav button{
+    flex:1;background:none;border:none;color:var(--dim);
+    font-family:var(--mono);font-size:12px;letter-spacing:2px;
+    padding:16px 0;cursor:pointer;border-top:2px solid transparent;
+  }
+  nav button.on{color:var(--grn);border-top-color:var(--grn)}
+  nav button:focus-visible{outline:2px solid var(--cyn);outline-offset:-2px}
+
+  main{padding:16px}
+  .page{display:none}
+  .page.on{display:block}
+
+  /* ============ CAPTURE ============ */
+  .padrow{display:flex;gap:10px}
+  .droppad{
+    flex:1;
+    border:1.5px dashed var(--line);
+    border-radius:10px;
+    padding:30px 12px;text-align:center;cursor:pointer;
+    color:var(--dim);transition:border-color .15s;
+  }
+  .droppad:hover,.droppad:focus-visible{border-color:var(--cyn);outline:none}
+  .droppad .big{font-family:var(--mono);color:var(--cyn);font-size:14px;letter-spacing:2px;margin-bottom:8px}
+  .droppad .sub{font-size:12px;line-height:1.5}
+  #camIn,#camLive{display:none}
+
+  .preview{margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .preview img{width:100%;border-radius:8px;border:1px solid var(--line);display:block}
+  .preview img.solo{grid-column:1 / -1}
+
+  .btn{
+    display:block;width:100%;
+    background:var(--panel);border:1px solid var(--grn);color:var(--grn);
+    font-family:var(--mono);font-size:14px;letter-spacing:3px;
+    padding:15px;border-radius:8px;cursor:pointer;margin-top:12px;
+  }
+  .btn:active{background:#1a2e22}
+  .btn:focus-visible{outline:2px solid var(--cyn);outline-offset:2px}
+  .btn.ghost{border-color:var(--line);color:var(--dim);letter-spacing:2px;font-size:12px;padding:11px}
+  .btn.cyan{border-color:var(--cyn);color:var(--cyn)}
+  #expPanel{
+    position:fixed;inset:0;background:rgba(4,6,9,.85);z-index:100;
+    display:flex;align-items:center;justify-content:center;padding:16px;
+  }
+  .expbox{
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    width:100%;max-width:520px;padding:14px;
+  }
+  .exphead{
+    display:flex;justify-content:space-between;align-items:center;
+    font-family:var(--mono);color:var(--cyn);letter-spacing:2px;font-size:12px;
+    margin-bottom:10px;
+  }
+  .exphead button{
+    background:none;border:1px solid var(--line);border-radius:5px;color:var(--dim);
+    font-family:var(--mono);font-size:10px;letter-spacing:2px;padding:6px 10px;cursor:pointer;
+  }
+  #expText{
+    width:100%;height:200px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:6px;color:var(--grn);font-family:var(--mono);font-size:11px;
+    padding:10px;resize:none;
+  }
+  .btn:disabled{opacity:.45;cursor:default}
+
+  .status{
+    font-family:var(--mono);color:var(--amb);font-size:13px;
+    text-align:center;margin-top:14px;letter-spacing:1px;min-height:18px;
+  }
+  .status.err{color:var(--red)}
+  .blink{animation:blink 1.1s step-end infinite}
+  @keyframes blink{50%{opacity:.25}}
+  @media (prefers-reduced-motion:reduce){.blink{animation:none}}
+
+  /* ============ ACARS TICKET (signature element) ============ */
+  .ticket{
+    background:#f4f2ea;color:#23272b;
+    border-radius:3px;
+    margin-top:18px;
+    font-family:var(--mono);
+    position:relative;
+    box-shadow:0 6px 24px rgba(0,0,0,.5);
+  }
+  .ticket::before,.ticket::after{
+    content:'';position:absolute;left:0;right:0;height:8px;
+    background-image:radial-gradient(circle at 6px 0px, var(--bg) 5px, transparent 5.5px);
+    background-size:16px 8px;background-repeat:repeat-x;
+  }
+  .ticket::before{top:-1px}
+  .ticket::after{bottom:-1px;transform:scaleY(-1)}
+  .ticket .thead{
+    padding:16px 16px 8px;border-bottom:1px dashed #b9b4a4;
+    font-size:11px;letter-spacing:1px;color:#5a5f66;
+    display:flex;justify-content:space-between;
+  }
+  .dupbanner{
+    background:var(--amb);color:#23272b;
+    font-size:10px;letter-spacing:1.5px;font-weight:700;
+    padding:9px 16px;cursor:pointer;display:none;
+  }
+  .leg.dupe{border-color:var(--amb)}
+  #scanMsg{margin:10px 2px 0;min-height:16px}
+  .ticket .tbody{padding:12px 16px 18px}
+  .trow{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+  .tfield{flex:1;min-width:70px}
+  .tfield label{
+    display:block;font-size:9px;letter-spacing:1.5px;color:#8a857a;margin-bottom:3px;
+  }
+  .tfield input{
+    width:100%;background:transparent;border:none;border-bottom:1px solid #c9c4b4;
+    font-family:var(--mono);font-size:16px;font-weight:700;color:#23272b;
+    padding:2px 0;border-radius:0;
+  }
+  .tfield input:focus{outline:none;border-bottom-color:#23272b}
+  .tfield input.missing{border-bottom-color:var(--red);background:#fbe9e7}
+  .tcalc{
+    display:flex;gap:14px;border-top:1px dashed #b9b4a4;
+    padding-top:10px;margin-top:4px;font-size:13px;
+  }
+  .tcalc b{font-size:16px}
+  .tcalc span{color:#8a857a;font-size:10px;letter-spacing:1px;display:block}
+  .trole{display:flex;align-items:center;gap:8px;margin:4px 0 10px}
+  .trole span{font-size:9px;letter-spacing:1.5px;color:#8a857a}
+  .rbtn{
+    font-family:var(--mono);font-size:13px;font-weight:700;
+    padding:7px 18px;border:1px solid #b9b4a4;background:transparent;
+    color:#8a857a;border-radius:4px;cursor:pointer;letter-spacing:1px;
+  }
+  .rbtn.sel{background:#23272b;color:#f4f2ea;border-color:#23272b}
+
+  /* ============ LOGBOOK ============ */
+  .month{
+    font-family:var(--mono);color:var(--cyn);font-size:12px;letter-spacing:2px;
+    margin:20px 0 8px;display:flex;justify-content:space-between;
+  }
+  .month b{color:var(--grn)}
+  .leg{
+    background:var(--panel);border:1px solid var(--line);border-radius:8px;
+    padding:12px 14px;margin-bottom:8px;cursor:pointer;
+  }
+  .leg .top{display:flex;justify-content:space-between;font-family:var(--mono)}
+  .leg .flt{color:var(--wht);font-weight:700}
+  .leg .pair{color:var(--cyn)}
+  .leg .blk{color:var(--grn);font-weight:700}
+  .leg .bot{
+    display:flex;justify-content:space-between;margin-top:6px;
+    font-family:var(--mono);font-size:12px;color:var(--dim);
+  }
+  .leg .oooi{letter-spacing:1px}
+  .leg .detail{display:none;margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
+  .leg.open .detail{display:block}
+  .drow{display:flex;gap:8px;margin-bottom:8px}
+  .drow .f{flex:1}
+  .drow label{display:block;font-family:var(--mono);font-size:9px;letter-spacing:1.5px;color:var(--dim);margin-bottom:3px}
+  .drow input{
+    width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:5px;
+    color:var(--grn);font-family:var(--mono);font-size:14px;padding:7px 8px;
+  }
+  .drow input:focus{outline:none;border-color:var(--cyn)}
+  .rowbtns{display:flex;gap:8px;margin-top:4px}
+  .rowbtns button{
+    flex:1;background:none;border:1px solid var(--line);border-radius:6px;
+    color:var(--dim);font-family:var(--mono);font-size:11px;letter-spacing:2px;
+    padding:9px;cursor:pointer;
+  }
+  .rowbtns button.del{border-color:#5c2b28;color:var(--red)}
+  .empty{color:var(--dim);text-align:center;padding:50px 20px;font-size:14px;line-height:1.6}
+
+  /* ============ TOTALS ============ */
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+  .stat{
+    background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;
+  }
+  .stat .lbl{font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--cyn);margin-bottom:6px}
+  .stat .val{font-family:var(--mono);font-size:22px;font-weight:700;color:var(--grn)}
+  .limit{margin-top:14px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px}
+  .limit .lrow{display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;margin-bottom:6px}
+  .limit .lrow b{color:var(--wht)}
+  .bar{height:6px;background:var(--panel2);border-radius:3px;overflow:hidden;margin-bottom:14px}
+  .bar i{display:block;height:100%;background:var(--grn);border-radius:3px}
+  .bar i.warn{background:var(--amb)}
+  .bar i.max{background:var(--red)}
+  .note{color:var(--dim);font-size:11px;font-family:var(--mono);letter-spacing:.5px}
+
+  /* ============ SETTINGS ============ */
+  .set{margin-top:20px}
+  .set label{display:block;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--cyn);margin:12px 0 4px}
+  .set input{
+    width:100%;background:var(--panel);border:1px solid var(--line);border-radius:6px;
+    color:var(--wht);font-family:var(--mono);font-size:14px;padding:10px;
+  }
+  .set input:focus{outline:none;border-color:var(--cyn)}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>OOOI&nbsp;LOG<span>PILOT LOGBOOK</span></h1>
+  <div class="fma">
+    <div class="val" id="fmaHrs">0:00</div>
+    <div class="lbl">TOTAL BLOCK</div>
+  </div>
+</header>
+
+<main>
+  <!-- ============ CAPTURE ============ -->
+  <section class="page on" id="pg-capture">
+    <div class="padrow">
+      <div class="droppad" id="padCam" tabindex="0" role="button" aria-label="Open the camera to snap the OOOI printout">
+        <div class="big">&#9678; CAMERA</div>
+        <div class="sub">Snap the printout now.<br>Snap again to add more legs.</div>
+      </div>
+      <div class="droppad" id="padLib" tabindex="0" role="button" aria-label="Pick OOOI photos from your library">
+        <div class="big">+ PHOTOS</div>
+        <div class="sub">Pick from your library.<br>Up to 6 at once.</div>
+      </div>
+    </div>
+    <input type="file" id="camLive" accept="image/*" capture="environment">
+    <input type="file" id="camIn" accept="image/*" multiple>
+    <div class="preview" id="preview" style="display:none"></div>
+    <button class="btn" id="readBtn" style="display:none">READ&nbsp;OOOI</button>
+    <button class="btn ghost" id="clearBtn" style="display:none">CLEAR PHOTOS</button>
+    <div class="status" id="status"></div>
+    <div id="review"></div>
+    <button class="btn" id="saveBtn" style="display:none">SAVE&nbsp;TO&nbsp;LOGBOOK</button>
+    <button class="btn ghost" id="manualBtn">ENTER LEG MANUALLY</button>
+  </section>
+
+  <!-- ============ LOGBOOK ============ -->
+  <section class="page" id="pg-logbook">
+    <div id="legList"></div>
+    <div class="note" id="scanMsg"></div>
+    <button class="btn ghost" id="dupeBtn">SCAN FOR DUPLICATES</button>
+    <button class="btn ghost" id="purgeBtn" style="display:none;border-color:#5c2b28;color:var(--red)">REMOVE EXTRAS</button>
+    <button class="btn ghost" id="csvBtn">EXPORT CSV</button>
+    <button class="btn ghost" id="backupBtn">EXPORT BACKUP (JSON)</button>
+    <button class="btn ghost" id="restoreBtn">IMPORT BACKUP FILE</button>
+    <button class="btn ghost" id="pasteBtn">IMPORT FROM PASTE</button>
+    <input type="file" id="restoreIn" accept=".json,application/json" style="display:none">
+  </section>
+
+  <!-- ============ TOTALS ============ -->
+  <section class="page" id="pg-totals">
+    <div class="grid">
+      <div class="stat"><div class="lbl">TOTAL BLOCK</div><div class="val" id="tBlock">0:00</div></div>
+      <div class="stat"><div class="lbl">TOTAL AIR</div><div class="val" id="tAir">0:00</div></div>
+      <div class="stat"><div class="lbl">THIS MONTH</div><div class="val" id="tMonth">0:00</div></div>
+      <div class="stat"><div class="lbl">THIS YEAR</div><div class="val" id="tYear">0:00</div></div>
+      <div class="stat"><div class="lbl">PF BLOCK</div><div class="val" id="tPF">0:00</div></div>
+      <div class="stat"><div class="lbl">PM BLOCK</div><div class="val" id="tPM">0:00</div></div>
+      <div class="stat"><div class="lbl">LEGS</div><div class="val" id="tLegs">0</div></div>
+      <div class="stat"><div class="lbl">LANDINGS</div><div class="val" id="tLdg">0</div></div>
+    </div>
+
+    <div class="limit">
+      <div class="lrow"><span>LAST 28 DAYS</span><b id="l28">0:00 / 112:00</b></div>
+      <div class="bar"><i id="b28" style="width:0%"></i></div>
+      <div class="lrow"><span>LAST 365 DAYS</span><b id="l365">0:00 / 1000:00</b></div>
+      <div class="bar"><i id="b365" style="width:0%"></i></div>
+      <div class="note">CARs flight time limits - 112 h / 28 days, 1000 h / 365 days</div>
+    </div>
+
+    <div class="set">
+      <label for="setType">DEFAULT AIRCRAFT TYPE</label>
+      <input id="setType" placeholder="A321">
+      <label for="setKey">ANTHROPIC API KEY (only needed when self-hosted, e.g. Netlify)</label>
+      <input id="setKey" type="password" placeholder="sk-ant-..." autocomplete="off">
+    </div>
+  </section>
+</main>
+
+<div id="expPanel" style="display:none">
+  <div class="expbox">
+    <div class="exphead"><span id="expTitle">EXPORT</span><button id="expClose">CLOSE</button></div>
+    <div class="note" style="margin-bottom:8px">If no download started (blocked in preview), copy the data below and paste it into a file.</div>
+    <textarea id="expText" readonly spellcheck="false"></textarea>
+    <button class="btn cyan" id="expCopy">COPY TO CLIPBOARD</button>
+    <button class="btn" id="expImport" style="display:none">IMPORT PASTED DATA</button>
+  </div>
+</div>
+
+<nav>
+  <button class="on" data-pg="capture">CAPTURE</button>
+  <button data-pg="logbook">LOGBOOK</button>
+  <button data-pg="totals">TOTALS</button>
+</nav>
+
+<script>
+/* ================= STORAGE (localStorage w/ in-memory fallback) ================= */
+const store = (()=>{
+  let mem = {};
+  let ok = true;
+  try { localStorage.setItem('__t','1'); localStorage.removeItem('__t'); }
+  catch(e){ ok = false; }
+  return {
+    get(k,d){ try{ if(ok){const v=localStorage.getItem(k); return v?JSON.parse(v):d;} }catch(e){} return k in mem ? mem[k] : d; },
+    set(k,v){ try{ if(ok){localStorage.setItem(k,JSON.stringify(v)); return;} }catch(e){} mem[k]=v; }
+  };
+})();
+
+let entries = store.get('oooi_entries', []);
+let settings = store.get('oooi_settings', { type:'A321', key:'' });
+let pendingImgs = [];        // dataURL jpegs (up to 6 per batch)
+let pendingLegs = [];        // parsed legs awaiting confirmation
+
+/* ================= TIME HELPERS ================= */
+function normT(s){
+  if(s==null) return null;
+  s = String(s).replace(/[^0-9]/g,'');
+  if(s.length===3) s = '0'+s;
+  if(s.length!==4) return null;
+  const h=+s.slice(0,2), m=+s.slice(2);
+  if(h>23||m>59) return null;
+  return s;
+}
+function diffMin(a,b){ // b - a, with midnight rollover
+  a=normT(a); b=normT(b);
+  if(!a||!b) return null;
+  let am=+a.slice(0,2)*60 + +a.slice(2);
+  let bm=+b.slice(0,2)*60 + +b.slice(2);
+  if(bm<am) bm+=1440;
+  return bm-am;
+}
+function fmtMin(m){
+  if(m==null||isNaN(m)) return '--:--';
+  return Math.floor(m/60)+':' + String(m%60).padStart(2,'0');
+}
+function fmtDec(m){ return m==null?'':(m/60).toFixed(1); }
+function dupKey(e){
+  const flt=String(e.flt||'').replace(/\s/g,'').toUpperCase();
+  if(flt) return (e.date||'')+'|'+flt;
+  return (e.date||'')+'|'+(e.out||'')+'|'+String(e.from||'').toUpperCase()+'|'+String(e.to||'').toUpperCase();
+}
+
+/* ================= NAV ================= */
+document.querySelectorAll('nav button').forEach(b=>{
+  b.onclick=()=>{
+    document.querySelectorAll('nav button').forEach(x=>x.classList.remove('on'));
+    document.querySelectorAll('.page').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on');
+    document.getElementById('pg-'+b.dataset.pg).classList.add('on');
+    if(b.dataset.pg==='logbook') renderLog();
+    if(b.dataset.pg==='totals') renderTotals();
+  };
+});
+
+/* ================= CAPTURE ================= */
+const padCam=document.getElementById('padCam'),
+      padLib=document.getElementById('padLib'),
+      camLive=document.getElementById('camLive'),
+      camIn=document.getElementById('camIn'),
+      preview=document.getElementById('preview'),
+      readBtn=document.getElementById('readBtn'),
+      statusEl=document.getElementById('status'),
+      reviewEl=document.getElementById('review'),
+      saveBtn=document.getElementById('saveBtn'),
+      clearBtn=document.getElementById('clearBtn');
+
+padCam.onclick=()=>camLive.click();
+padLib.onclick=()=>camIn.click();
+padCam.onkeydown=e=>{ if(e.key==='Enter'||e.key===' ') camLive.click(); };
+padLib.onkeydown=e=>{ if(e.key==='Enter'||e.key===' ') camIn.click(); };
+
+camLive.onchange=e=>{ handleFiles([...e.target.files], true);  camLive.value=''; };
+camIn.onchange  =e=>{ handleFiles([...e.target.files], false); camIn.value='';  };
+
+async function handleFiles(files, append){
+  if(!files.length) return;
+  status('');
+  if(!append){ pendingImgs=[]; }
+  const room = 6 - pendingImgs.length;
+  if(room<=0){ status('MAX 6 PHOTOS PER BATCH - save or clear first.', true); return; }
+  files = files.slice(0, room);
+  for(let n=0;n<files.length;n++){
+    status('LOADING PHOTO '+(n+1)+'/'+files.length+'...');
+    try{
+      pendingImgs.push(await downscale(files[n]));
+    }catch(err){
+      status('PHOTO '+(n+1)+': '+err.message, true);
+      renderThumbs();
+      return;
+    }
+  }
+  status('');
+  renderThumbs();
+  reviewEl.innerHTML='';
+  saveBtn.style.display='none';
+}
+
+function renderThumbs(){
+  preview.innerHTML='';
+  preview.style.display = pendingImgs.length ? 'grid' : 'none';
+  pendingImgs.forEach((u,n)=>{
+    const im=document.createElement('img');
+    im.src=u; im.alt='OOOI photo '+(n+1);
+    if(pendingImgs.length===1) im.className='solo';
+    preview.appendChild(im);
+  });
+  readBtn.style.display = pendingImgs.length ? 'block' : 'none';
+  readBtn.textContent = 'READ OOOI'+(pendingImgs.length>1?' ('+pendingImgs.length+' PHOTOS)':'');
+  clearBtn.style.display = pendingImgs.length ? 'block' : 'none';
+}
+
+clearBtn.onclick=()=>{
+  pendingImgs=[]; pendingLegs=[];
+  reviewEl.innerHTML=''; saveBtn.style.display='none';
+  status('');
+  renderThumbs();
+};
+
+function readAsDataURL(file){
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onload=()=>res(r.result);
+    r.onerror=()=>rej(new Error('FILE READ FAILED'));
+    r.readAsDataURL(file);
+  });
+}
+function loadImg(src){
+  return new Promise((res,rej)=>{
+    const i=new Image();
+    i.onload=()=>res(i);
+    i.onerror=()=>rej(new Error('decode'));
+    i.src=src;
+  });
+}
+async function heicToJpeg(file){
+  if(!window.heic2any){
+    await new Promise((res,rej)=>{
+      const s=document.createElement('script');
+      s.src='https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js';
+      s.onload=res;
+      s.onerror=()=>rej(new Error('CONVERTER LOAD FAILED'));
+      document.head.appendChild(s);
+    });
+  }
+  const out = await window.heic2any({blob:file, toType:'image/jpeg', quality:0.85});
+  return Array.isArray(out)?out[0]:out;
+}
+async function downscale(file){
+  let img;
+  try{
+    img = await loadImg(await readAsDataURL(file));
+  }catch(e){
+    // Browser could not decode it - probably HEIC from an iPhone. Convert, then retry.
+    status('CONVERTING HEIC...');
+    try{
+      const jpeg = await heicToJpeg(file);
+      img = await loadImg(await readAsDataURL(jpeg));
+    }catch(e2){
+      throw new Error('UNSUPPORTED IMAGE FORMAT ('+(file.type||'unknown')+'). Workaround: take a screenshot of the photo and upload the screenshot (it will be a standard format).');
+    }
+  }
+  const MAX=1568;
+  let w=img.width,h=img.height;
+  if(Math.max(w,h)>MAX){ const s=MAX/Math.max(w,h); w=Math.round(w*s); h=Math.round(h*s); }
+  const c=document.createElement('canvas'); c.width=w; c.height=h;
+  c.getContext('2d').drawImage(img,0,0,w,h);
+  return c.toDataURL('image/jpeg',0.85);
+}
+
+function status(msg,err){
+  statusEl.textContent=msg;
+  statusEl.className='status'+(err?' err':'');
+  statusEl.classList.toggle('blink', !err && !!msg);
+}
+
+readBtn.onclick=async ()=>{
+  if(!pendingImgs.length) return;
+  readBtn.disabled=true;
+  status('PARSING ACARS DATA...');
+  try{
+    const legs = await extractOOOI(pendingImgs);
+    if(!legs.length) throw new Error('No flight data found in the photos. Try closer, sharper shots.');
+    pendingLegs = legs;
+    renderReview();
+    status('');
+  }catch(err){
+    status(err.message || 'Read failed. Check the photos and try again.', true);
+  }
+  readBtn.disabled=false;
+};
+
+async function extractOOOI(dataUrls){
+  const headers = {'Content-Type':'application/json'};
+  if(settings.key){
+    headers['x-api-key']=settings.key;
+    headers['anthropic-version']='2023-06-01';
+    headers['anthropic-dangerous-direct-browser-access']='true';
+  }
+  const content = dataUrls.map(u=>({
+    type:'image',
+    source:{type:'base64',media_type:'image/jpeg',data:u.split(',')[1]}
+  }));
+  content.push({type:'text',text:
+'These are '+dataUrls.length+' photo(s) of Airbus OOOI displays, ACARS printouts, or journey logs. Extract EVERY flight leg visible across ALL photos. If the same leg appears in two photos, include it only once.\n\n'+
+'Respond with ONLY valid JSON, no markdown fences, no commentary:\n'+
+'{"flights":[{"date":"YYYY-MM-DD or null","flight_number":"e.g. TS110 or null","registration":"e.g. C-GOIH or null","from":"airport code or null","to":"airport code or null","out":"HHMM","off":"HHMM","on":"HHMM","in":"HHMM"}]}\n\n'+
+'List the legs in chronological order. Times are UTC, 4 digits (e.g. "1432"). Use null for anything unreadable. OUT = doors closed/blocks off, OFF = takeoff, ON = landing, IN = blocks on.'});
+  let resp;
+  try{
+    resp = await fetch('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers,
+    body:JSON.stringify({
+      model:'claude-sonnet-4-6',
+      max_tokens:1500,
+      messages:[{role:'user',content}]
+    })
+    });
+  }catch(netErr){
+    throw new Error('API CALL BLOCKED. Inside claude.ai preview it should work with no key - retry once. If you downloaded/hosted this file, paste your Anthropic API key in TOTALS settings.');
+  }
+  if(!resp.ok){
+    let detail='';
+    try{ const eb=await resp.json(); detail=(eb.error&&eb.error.message)?(' - '+eb.error.message):''; }catch(e){}
+    throw new Error('API ERROR '+resp.status+detail+((resp.status===401&&!settings.key)?' (add your API key in TOTALS settings)':''));
+  }
+  const data = await resp.json();
+  const txt = (data.content||[]).map(c=>c.text||'').join('');
+  const m = txt.match(/\{[\s\S]*\}/);
+  if(!m) throw new Error('MODEL RESPONSE UNREADABLE - try a sharper photo.');
+  let parsed;
+  try{ parsed = JSON.parse(m[0]); }
+  catch(e){ throw new Error('MODEL RESPONSE UNREADABLE - try a sharper photo.'); }
+  return (parsed.flights||[]).map(f=>({
+    date: f.date || new Date().toISOString().slice(0,10),
+    flt: f.flight_number || '',
+    reg: f.registration || '',
+    type: settings.type || '',
+    from: (f.from||'').toUpperCase(),
+    to: (f.to||'').toUpperCase(),
+    out: normT(f.out), off: normT(f.off), on: normT(f.on), inn: normT(f.in),
+    ldg: 1, night: '', role:'PF', remarks:''
+  }));
+}
+
+/* ================= REVIEW TICKET ================= */
+function renderReview(){
+  reviewEl.innerHTML = pendingLegs.map((L,i)=>ticketHTML(L,i)).join('');
+  saveBtn.style.display='block';
+  reviewEl.querySelectorAll('input').forEach(inp=>{
+    inp.oninput=()=>{
+      const i=+inp.dataset.i, k=inp.dataset.k;
+      pendingLegs[i][k]=inp.value;
+      updateTicketCalc(i);
+    };
+  });
+  reviewEl.querySelectorAll('.rbtn').forEach(b=>{
+    b.onclick=()=>{
+      const i=+b.dataset.i;
+      pendingLegs[i].role=b.dataset.role;
+      document.getElementById('tk'+i).querySelectorAll('.rbtn').forEach(x=>
+        x.classList.toggle('sel', x.dataset.role===pendingLegs[i].role));
+    };
+  });
+  reviewEl.querySelectorAll('.dupbanner').forEach(bn=>{
+    bn.onclick=()=>{
+      const i=+bn.dataset.i;
+      pendingLegs[i]._save = !pendingLegs[i]._save;
+      updateTicketCalc(i);
+    };
+  });
+  pendingLegs.forEach((_,i)=>updateTicketCalc(i));
+}
+
+function ticketHTML(L,i){
+  const f=(k,lbl,ph)=>'<div class="tfield"><label>'+lbl+'</label><input data-i="'+i+'" data-k="'+k+'" value="'+esc(L[k]==null?'':L[k])+'" placeholder="'+(ph||'')+'"></div>';
+  return '<div class="ticket" id="tk'+i+'">'+
+    '<div class="thead"><span>ACARS &middot; LEG '+(i+1)+'</span><span>VERIFY &amp; CORRECT</span></div>'+
+    '<div class="dupbanner" data-i="'+i+'">ALREADY IN LOGBOOK &mdash; WILL BE SKIPPED (TAP TO SAVE ANYWAY)</div>'+
+    '<div class="tbody">'+
+      '<div class="trow">'+f('date','DATE (UTC)','YYYY-MM-DD')+f('flt','FLT')+f('reg','REG')+'</div>'+
+      '<div class="trow">'+f('from','FROM')+f('to','TO')+f('type','TYPE')+'</div>'+
+      '<div class="trow">'+f('out','OUT','HHMM')+f('off','OFF','HHMM')+f('on','ON','HHMM')+f('inn','IN','HHMM')+'</div>'+
+      '<div class="trole"><span>PILOT ROLE</span>'+
+        '<button type="button" class="rbtn'+(L.role==='PF'?' sel':'')+'" data-i="'+i+'" data-role="PF">PF</button>'+
+        '<button type="button" class="rbtn'+(L.role==='PM'?' sel':'')+'" data-i="'+i+'" data-role="PM">PM</button>'+
+      '</div>'+
+      '<div class="tcalc">'+
+        '<div><span>BLOCK</span><b class="cBlock">--:--</b></div>'+
+        '<div><span>AIR</span><b class="cAir">--:--</b></div>'+
+      '</div>'+
+    '</div>'+
+  '</div>';
+}
+
+function updateTicketCalc(i){
+  const L=pendingLegs[i], tk=document.getElementById('tk'+i);
+  if(!tk) return;
+  const blk=diffMin(L.out,L.inn), air=diffMin(L.off,L.on);
+  tk.querySelector('.cBlock').textContent=fmtMin(blk);
+  tk.querySelector('.cAir').textContent=fmtMin(air);
+  ['out','off','on','inn'].forEach(k=>{
+    const inp=tk.querySelector('input[data-k="'+k+'"]');
+    inp.classList.toggle('missing', !normT(L[k]));
+  });
+  // duplicate check: vs saved entries and vs earlier legs in this batch
+  const k=dupKey(L);
+  const dupSaved = entries.some(e=>dupKey(e)===k);
+  const dupBatch = pendingLegs.some((o,j)=>j<i && dupKey(o)===k);
+  L._dup = dupSaved || dupBatch;
+  const bn=tk.querySelector('.dupbanner');
+  bn.style.display = L._dup ? 'block' : 'none';
+  if(L._dup){
+    bn.textContent = L._save
+      ? 'DUPLICATE &mdash; WILL SAVE ANYWAY (TAP TO SKIP)'.replace('&mdash;','\u2014')
+      : 'ALREADY IN LOGBOOK \u2014 WILL BE SKIPPED (TAP TO SAVE ANYWAY)';
+  } else {
+    L._save = false;
+  }
+}
+
+saveBtn.onclick=()=>{
+  const toSave = pendingLegs.filter(L=>!L._dup || L._save);
+  const skipped = pendingLegs.length - toSave.length;
+  if(!toSave.length){
+    status(skipped?'ALL LEGS ARE DUPLICATES - NOTHING SAVED.':'NOTHING TO SAVE.', true);
+    return;
+  }
+  const bad = toSave.some(L=>!normT(L.out)||!normT(L.inn));
+  if(bad){ status('OUT and IN are required on every leg.', true); return; }
+  toSave.forEach(L=>{
+    const rec = Object.assign({ id:Date.now()+Math.random() }, L, {
+      out:normT(L.out), off:normT(L.off), on:normT(L.on), inn:normT(L.inn) });
+    delete rec._dup; delete rec._save;
+    entries.push(rec);
+  });
+  store.set('oooi_entries', entries);
+  pendingLegs=[]; pendingImgs=[];
+  reviewEl.innerHTML=''; saveBtn.style.display='none';
+  renderThumbs();
+  camIn.value=''; camLive.value='';
+  status('');
+  document.querySelector('nav button[data-pg="logbook"]').click();
+  document.getElementById('scanMsg').textContent =
+    'SAVED '+toSave.length+' LEG'+(toSave.length>1?'S':'')+(skipped?' - SKIPPED '+skipped+' DUPLICATE'+(skipped>1?'S':''):'');
+  updateFMA();
+};
+
+document.getElementById('manualBtn').onclick=()=>{
+  pendingLegs.push({date:new Date().toISOString().slice(0,10),flt:'',reg:'',type:settings.type||'',from:'',to:'',out:'',off:'',on:'',inn:'',ldg:1,night:'',role:'PF',remarks:''});
+  renderReview();
+};
+
+/* ================= LOGBOOK ================= */
+function renderLog(){
+  const list=document.getElementById('legList');
+  if(!entries.length){
+    list.innerHTML='<div class="empty">Empty logbook.<br>Snap your first OOOI photo in CAPTURE.</div>';
+    return;
+  }
+  const sorted=entries.slice().sort((a,b)=> (b.date+b.out).localeCompare(a.date+a.out));
+  let html='', curMonth='';
+  sorted.forEach(L=>{
+    const mk=(L.date||'').slice(0,7);
+    if(mk!==curMonth){
+      curMonth=mk;
+      const mTot = entries.filter(e=>(e.date||'').slice(0,7)===mk)
+                          .reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
+      const d=new Date(mk+'-15T12:00:00');
+      const lbl = isNaN(d) ? mk : d.toLocaleString('en',{month:'short',year:'numeric'}).toUpperCase();
+      html+='<div class="month"><span>'+lbl+'</span><b>'+fmtMin(mTot)+'</b></div>';
+    }
+    const blk=diffMin(L.out,L.inn), air=diffMin(L.off,L.on);
+    html+='<div class="leg" data-id="'+L.id+'">'+
+      '<div class="top"><span class="flt">'+(esc(L.flt)||'&mdash;')+'</span><span class="pair">'+esc(L.from)+'&rarr;'+esc(L.to)+'</span><span class="blk">'+fmtMin(blk)+'</span></div>'+
+      '<div class="bot"><span>'+esc(L.date)+'</span><span class="oooi">'+(L.out||'----')+' '+(L.off||'----')+' '+(L.on||'----')+' '+(L.inn||'----')+'</span><span>AIR '+fmtMin(air)+'</span></div>'+
+      '<div class="detail">'+
+        '<div class="drow">'+
+          '<div class="f"><label>REG</label><input data-k="reg" value="'+esc(L.reg)+'"></div>'+
+          '<div class="f"><label>TYPE</label><input data-k="type" value="'+esc(L.type)+'"></div>'+
+          '<div class="f"><label>ROLE PF/PM</label><input data-k="role" value="'+esc(L.role)+'"></div>'+
+        '</div>'+
+        '<div class="drow">'+
+          '<div class="f"><label>LANDINGS</label><input data-k="ldg" value="'+esc(L.ldg)+'"></div>'+
+          '<div class="f"><label>NIGHT (H:MM)</label><input data-k="night" value="'+esc(L.night)+'"></div>'+
+        '</div>'+
+        '<div class="drow"><div class="f"><label>REMARKS</label><input data-k="remarks" value="'+esc(L.remarks)+'"></div></div>'+
+        '<div class="rowbtns"><button class="del" data-act="del">DELETE LEG</button></div>'+
+      '</div>'+
+    '</div>';
+  });
+  list.innerHTML=html;
+
+  list.querySelectorAll('.leg').forEach(el=>{
+    el.addEventListener('click',e=>{
+      if(e.target.tagName==='INPUT'||e.target.tagName==='BUTTON') return;
+      el.classList.toggle('open');
+    });
+    el.querySelectorAll('input').forEach(inp=>{
+      inp.oninput=()=>{
+        const L=entries.find(x=>x.id==el.dataset.id);
+        if(L){ L[inp.dataset.k]=inp.value; store.set('oooi_entries',entries); updateFMA(); }
+      };
+    });
+    const del=el.querySelector('[data-act="del"]');
+    del.onclick=()=>{
+      if(del.textContent!=='CONFIRM DELETE'){ del.textContent='CONFIRM DELETE'; return; }
+      entries=entries.filter(x=>x.id!=el.dataset.id);
+      store.set('oooi_entries',entries);
+      renderLog(); updateFMA();
+    };
+  });
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+
+/* ================= DUPLICATE SCAN ================= */
+const dupeBtn=document.getElementById('dupeBtn'),
+      purgeBtn=document.getElementById('purgeBtn'),
+      scanMsg=document.getElementById('scanMsg');
+let extraIds=[];
+
+dupeBtn.onclick=()=>{
+  renderLog();
+  const groups={};
+  entries.forEach(e=>{ const k=dupKey(e); (groups[k]=groups[k]||[]).push(e); });
+  const dupeGroups=Object.values(groups).filter(g=>g.length>1);
+  extraIds=[];
+  dupeGroups.forEach(g=>g.slice(1).forEach(x=>extraIds.push(x.id)));
+  const allDupIds=new Set();
+  dupeGroups.forEach(g=>g.forEach(x=>allDupIds.add(String(x.id))));
+  document.querySelectorAll('.leg').forEach(el=>{
+    el.classList.toggle('dupe', allDupIds.has(String(el.dataset.id)));
+  });
+  purgeBtn.textContent='REMOVE EXTRAS';
+  if(!extraIds.length){
+    scanMsg.textContent='NO DUPLICATES FOUND (matched on date + flight number)';
+    purgeBtn.style.display='none';
+  }else{
+    scanMsg.textContent=extraIds.length+' REDUNDANT COP'+(extraIds.length>1?'IES':'Y')+' HIGHLIGHTED - oldest copy of each is kept if you remove';
+    purgeBtn.style.display='block';
+  }
+};
+
+purgeBtn.onclick=()=>{
+  if(purgeBtn.textContent!=='CONFIRM REMOVE'){ purgeBtn.textContent='CONFIRM REMOVE'; return; }
+  const del=new Set(extraIds.map(String));
+  entries=entries.filter(e=>!del.has(String(e.id)));
+  store.set('oooi_entries',entries);
+  scanMsg.textContent='REMOVED '+extraIds.length+' DUPLICATE'+(extraIds.length>1?'S':'');
+  extraIds=[];
+  purgeBtn.style.display='none';
+  renderLog(); updateFMA();
+};
+
+/* ================= EXPORT HELPER (download + copy fallback) ================= */
+const expPanel=document.getElementById('expPanel'),
+      expText=document.getElementById('expText'),
+      expTitle=document.getElementById('expTitle');
+document.getElementById('expClose').onclick=()=>expPanel.style.display='none';
+document.getElementById('expCopy').onclick=async ()=>{
+  const btn=document.getElementById('expCopy');
+  try{
+    await navigator.clipboard.writeText(expText.value);
+    btn.textContent='COPIED';
+  }catch(e){
+    expText.select();
+    try{ document.execCommand('copy'); btn.textContent='COPIED'; }
+    catch(e2){ btn.textContent='SELECT + COPY MANUALLY'; expText.focus(); expText.select(); }
+  }
+  setTimeout(()=>btn.textContent='COPY TO CLIPBOARD',1500);
+};
+
+function exportFile(filename, mime, content, title){
+  try{
+    const blob=new Blob([content],{type:mime});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },2000);
+  }catch(e){}
+  // Always offer the copy fallback - downloads are blocked in some sandboxes
+  resetPanelMode();
+  expTitle.textContent=title+' - '+filename;
+  expText.value=content;
+  expPanel.style.display='flex';
+}
+
+/* ================= CSV ================= */
+document.getElementById('csvBtn').onclick=()=>{
+  const head='date,flight,registration,type,from,to,out,off,on,in,block_hmm,block_dec,air_hmm,air_dec,landings,night,role,remarks';
+  const rows=entries.slice().sort((a,b)=>(a.date+a.out).localeCompare(b.date+b.out)).map(L=>{
+    const blk=diffMin(L.out,L.inn), air=diffMin(L.off,L.on);
+    return [L.date,L.flt,L.reg,L.type,L.from,L.to,L.out,L.off,L.on,L.inn,
+            fmtMin(blk),fmtDec(blk),fmtMin(air),fmtDec(air),L.ldg,L.night,L.role,
+            '"'+String(L.remarks||'').replace(/"/g,'""')+'"'].join(',');
+  });
+  exportFile('oooi-logbook.csv','text/csv',head+'\n'+rows.join('\n'),'CSV EXPORT');
+};
+
+/* ================= BACKUP / RESTORE ================= */
+document.getElementById('backupBtn').onclick=()=>{
+  const payload={ app:'oooi-log', version:1, exported:new Date().toISOString(),
+    entries, settings:{ type:settings.type } }; // API key deliberately excluded
+  exportFile('oooi-backup-'+new Date().toISOString().slice(0,10)+'.json',
+             'application/json', JSON.stringify(payload,null,1), 'BACKUP');
+  scanMsg.textContent='BACKUP READY ('+entries.length+' LEGS)';
+};
+
+const restoreIn=document.getElementById('restoreIn');
+document.getElementById('restoreBtn').onclick=()=>restoreIn.click();
+restoreIn.onchange=e=>{
+  const f=e.target.files[0];
+  if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{ mergeBackup(r.result); restoreIn.value=''; };
+  r.readAsText(f);
+};
+
+function mergeBackup(text){
+  try{
+    const p=JSON.parse(text);
+    const inc=Array.isArray(p)?p:(p.entries||[]);
+    if(!Array.isArray(inc)) throw 0;
+    const have=new Set(entries.map(dupKey));
+    let added=0, skipped=0;
+    inc.forEach(L=>{
+      if(!L || !L.date){ return; }
+      const k=dupKey(L);
+      if(have.has(k)){ skipped++; return; }
+      have.add(k);
+      entries.push(Object.assign({id:Date.now()+Math.random()},L));
+      added++;
+    });
+    store.set('oooi_entries',entries);
+    renderLog(); updateFMA();
+    scanMsg.textContent='IMPORTED '+added+' LEG'+(added!==1?'S':'')+(skipped?' - SKIPPED '+skipped+' DUPLICATE'+(skipped>1?'S':''):'');
+  }catch(err){
+    scanMsg.textContent='IMPORT FAILED - NOT A VALID BACKUP';
+  }
+}
+
+const expImport=document.getElementById('expImport');
+document.getElementById('pasteBtn').onclick=()=>{
+  expTitle.textContent='IMPORT - PASTE BACKUP JSON BELOW';
+  expText.value=''; expText.readOnly=false;
+  document.getElementById('expCopy').style.display='none';
+  expImport.style.display='block';
+  expPanel.style.display='flex';
+  expText.focus();
+};
+expImport.onclick=()=>{
+  mergeBackup(expText.value);
+  expPanel.style.display='none';
+  resetPanelMode();
+};
+function resetPanelMode(){
+  expText.readOnly=true;
+  document.getElementById('expCopy').style.display='block';
+  expImport.style.display='none';
+}
+
+/* ================= TOTALS ================= */
+function sumRange(daysBack){
+  const cutoff=new Date(Date.now()-daysBack*86400000).toISOString().slice(0,10);
+  return entries.filter(e=>e.date>=cutoff).reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
+}
+function renderTotals(){
+  const blk=entries.reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
+  const air=entries.reduce((s,e)=>s+(diffMin(e.off,e.on)||0),0);
+  const nowM=new Date().toISOString().slice(0,7), nowY=new Date().toISOString().slice(0,4);
+  const mo=entries.filter(e=>(e.date||'').slice(0,7)===nowM).reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
+  const yr=entries.filter(e=>(e.date||'').slice(0,4)===nowY).reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
+  const ldg=entries.reduce((s,e)=>s+(+e.ldg||0),0);
+  const roleOf=e=>String(e.role||'PF').trim().toUpperCase();
+  const pf=entries.filter(e=>roleOf(e)!=='PM').reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
+  const pm=entries.filter(e=>roleOf(e)==='PM').reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
+  document.getElementById('tPF').textContent=fmtMin(pf);
+  document.getElementById('tPM').textContent=fmtMin(pm);
+  document.getElementById('tBlock').textContent=fmtMin(blk);
+  document.getElementById('tAir').textContent=fmtMin(air);
+  document.getElementById('tMonth').textContent=fmtMin(mo);
+  document.getElementById('tYear').textContent=fmtMin(yr);
+  document.getElementById('tLegs').textContent=entries.length;
+  document.getElementById('tLdg').textContent=ldg;
+
+  const d28=sumRange(28), d365=sumRange(365);
+  setBar('b28','l28',d28,112*60);
+  setBar('b365','l365',d365,1000*60);
+}
+function setBar(barId,lblId,val,max){
+  const pct=Math.min(100,val/max*100);
+  const bar=document.getElementById(barId);
+  bar.style.width=pct+'%';
+  bar.className = pct>=100?'max':(pct>=85?'warn':'');
+  document.getElementById(lblId).textContent=fmtMin(val)+' / '+fmtMin(max);
+}
+
+/* ================= SETTINGS + FMA ================= */
+const setType=document.getElementById('setType'), setKey=document.getElementById('setKey');
+setType.value=settings.type||''; setKey.value=settings.key||'';
+setType.oninput=()=>{settings.type=setType.value.trim(); store.set('oooi_settings',settings);};
+setKey.oninput=()=>{settings.key=setKey.value.trim(); store.set('oooi_settings',settings);};
+
+function updateFMA(){
+  const blk=entries.reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
+  document.getElementById('fmaHrs').textContent=fmtMin(blk);
+}
+updateFMA();
+</script>
+</body>
+</html>
