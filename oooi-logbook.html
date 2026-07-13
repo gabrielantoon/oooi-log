@@ -881,12 +881,21 @@ function parseMCDULoose(raw){
     if(c&&c.interps.length) cands.push({pos, strong:c.strong, interps:c.interps});
   });
   const strongs=cands.filter(c=>c.strong);
+  // windows: contiguous runs of 4 candidates containing all strongs,
+  // plus runs of 3 with one slot left empty (reconstructed from BLOCK/FLIGHT)
   let windows=[];
-  if(strongs.length>=4) windows=[strongs.slice(0,4)];
-  else if(strongs.length>=2){
+  if(strongs.length>=4){
+    windows.push({w:strongs.slice(0,4), hole:-1});
+  }
+  if(strongs.length>=2 && strongs.length<4){
     for(let a=0;a+4<=cands.length;a++){
       const w=cands.slice(a,a+4);
-      if(strongs.every(s=>w.includes(s))) windows.push(w);
+      if(strongs.every(s=>w.includes(s))) windows.push({w, hole:-1});
+    }
+    for(let a=0;a+3<=cands.length;a++){
+      const w3=cands.slice(a,a+3);
+      if(!strongs.every(s=>w3.includes(s))) continue;
+      for(let hole=0;hole<4;hole++) windows.push({w:w3, hole});
     }
   }
   if(!windows.length) return null;
@@ -896,10 +905,18 @@ function parseMCDULoose(raw){
       .map(c=>c.interps[0]).filter(Boolean)
       .map(s=>(+s.slice(0,2))*60+(+s.slice(2)));
   }
+  function addMin(t, m){
+    const base=(+t.slice(0,2))*60+(+t.slice(2));
+    let v=(base+m)%1440; if(v<0)v+=1440;
+    return String(Math.floor(v/60)).padStart(2,'0')+String(v%60).padStart(2,'0');
+  }
   const MAPS=[['out','off','inn','on'],['out','inn','off','on']];
   let best=null;
-  for(const w of windows){
+  for(const {w,hole} of windows){
     const durs=dursAfter(w);
+    if(hole>=0 && !durs.length) continue; // can't reconstruct without durations
+    const blockDur=durs.length?durs[0]:null;      // BLOCK printed before FLIGHT
+    const flightDur=durs.length>1?durs[1]:null;
     let prod=[[]];
     for(const c of w){
       const nxt=[];
@@ -910,14 +927,30 @@ function parseMCDULoose(raw){
     for(const times of prod){
       for(const map of MAPS){
         const leg={};
-        map.forEach((k,i)=>leg[k]=times[i]);
+        let ti=0;
+        for(let slot=0;slot<4;slot++){
+          if(slot===hole){ leg[map[slot]]=null; }
+          else leg[map[slot]]=times[ti++];
+        }
+        if(hole>=0){
+          // reconstruct the missing slot from durations
+          const k=map[hole];
+          if(k==='out' && leg.inn!=null && blockDur!=null) leg.out=addMin(leg.inn,-blockDur);
+          else if(k==='inn' && leg.out!=null && blockDur!=null) leg.inn=addMin(leg.out, blockDur);
+          else if(k==='off' && leg.on!=null && (flightDur!=null||blockDur!=null)) leg.off=addMin(leg.on,-(flightDur!=null?flightDur:blockDur));
+          else if(k==='on' && leg.off!=null && (flightDur!=null||blockDur!=null)) leg.on=addMin(leg.off,(flightDur!=null?flightDur:blockDur));
+          else continue;
+        }
         const blk=diffMin(leg.out,leg.inn), flt=diffMin(leg.off,leg.on);
         let score=strongCount;
-        if(blk!=null&&durs.includes(blk)) score+=3;
-        if(flt!=null&&durs.includes(flt)) score+=3;
+        const blockOK=(blk!=null&&durs.includes(blk));
+        const flightOK=(flt!=null&&durs.includes(flt));
+        if(blockOK) score+=3;
+        if(flightOK) score+=3;
         if(map===MAPS[0]) score+=1;
         if(blk!=null&&flt!=null&&blk>=flt) score+=1;
-        if(!best||score>best.score) best={score,leg,durs,strongCount};
+        if(hole>=0) score-=1; // prefer full reads over reconstructions
+        if(!best||score>best.score) best={score,leg,durs,strongCount,blockOK,flightOK,blockDur,flightDur};
       }
     }
   }
@@ -926,7 +959,7 @@ function parseMCDULoose(raw){
   if(!verified && best.strongCount<3) return null; // too unreliable, don't guess
 
   let flt='';
-  const firstPos=windows[0][0].pos;
+  const firstPos=windows[0].w[0].pos;
   for(let i=0;i<toks.length&&i<firstPos;i++){
     const tk=toks[i];
     if(tk.includes('/')||tk.length<5||tk.length>7) continue;
@@ -948,7 +981,7 @@ function parseMCDULoose(raw){
   }
   let date='';
   for(const tk of toks){
-    const m=tk.match(/(\d{1,3})([A-Z0-9]{3})(\d{2})$/);
+    const m=tk.match(/(\d{1,3})([A-Z0-9]{3})(\d{2})/);
     if(!m) continue;
     const mon=mcduMonth(m[2]);
     if(!mon) continue;
@@ -961,11 +994,15 @@ function parseMCDULoose(raw){
     break;
   }
   if(!date) date=new Date().toISOString().slice(0,10);
+  let remarks='';
+  if(!verified) remarks='OCR UNVERIFIED - CHECK TIMES';
+  else if(best.blockOK&&!best.flightOK&&best.flightDur!=null) remarks='CHECK OFF/ON - MCDU FLIGHT '+fmtMin(best.flightDur).replace(':','')+'';
+  else if(best.flightOK&&!best.blockOK&&best.blockDur!=null) remarks='CHECK OUT/IN - MCDU BLOCK '+fmtMin(best.blockDur).replace(':','')+'';
   return {
     leg:{date, flt, reg:'', type:settings.type||'', from, to,
       out:best.leg.out||'', off:best.leg.off||'', on:best.leg.on||'', inn:best.leg.inn||'',
       ldg:1, night:'', role:'PF',
-      remarks: verified?'':'OCR UNVERIFIED - CHECK TIMES'},
+      remarks},
     verified
   };
 }
