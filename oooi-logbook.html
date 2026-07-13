@@ -1073,16 +1073,27 @@ async function ocrExtract(dataUrls){
     tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/<>-*.: ',
     tessedit_pageseg_mode:'6'
   });
+  function legPlausible(L){
+    const blk=diffMin(L.out,L.inn), flt=diffMin(L.off,L.on);
+    const tOut=diffMin(L.out,L.off), tIn=diffMin(L.on,L.inn);
+    if(blk==null||flt==null) return false;
+    if(blk<flt) return false;              // block can't be shorter than airborne
+    if(blk>960) return false;              // >16h block = garbage
+    if(tOut==null||tOut<=0||tOut>120) return false;  // taxi out 0-2h
+    if(tIn==null||tIn<0||tIn>90) return false;       // taxi in 0-1.5h
+    return true;
+  }
   function parseAttempt(text){
-    // strict label parser first
-    const strict=parseOOOIText(text).filter(L=>L.out&&L.off&&L.on&&L.inn);
-    if(strict.length) return {legs:strict.map(L=>{L._v=true;return L;}), verified:true, filled:4};
+    // the verified layout parser is the authority for OCR text
     const loose=parseMCDULoose(text);
     if(loose){
       loose.leg._v=loose.verified;
       const filled=['out','off','on','inn'].filter(k=>loose.leg[k]).length;
       return {legs:[loose.leg], verified:loose.verified, filled};
     }
+    // label parser only as fallback, gated by physical plausibility, never marked verified
+    const strict=parseOOOIText(text).filter(L=>L.out&&L.off&&L.on&&L.inn&&legPlausible(L));
+    if(strict.length) return {legs:strict.map(L=>{L._v=false; L.remarks=L.remarks||'OCR UNVERIFIED - CHECK TIMES'; return L;}), verified:false, filled:4};
     return null;
   }
   const legs=[]; const failed=[];
