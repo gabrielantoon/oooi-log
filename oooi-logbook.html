@@ -808,9 +808,10 @@ function preprocessForOCR(dataUrl){
       ctx2.drawImage(c, sx,sy,sw,sh, 0,0,c2.width,c2.height);
       const d2=ctx2.getImageData(0,0,c2.width,c2.height), p2=d2.data;
       const hist=new Array(256).fill(0);
-      for(let i=0;i<p2.length;i+=4){
+      const grayVals=new Array(p2.length/4);
+      for(let i=0,j=0;i<p2.length;i+=4,j++){
         const g=Math.round(0.299*p2[i]+0.587*p2[i+1]+0.114*p2[i+2]);
-        p2[i]=g; hist[g]++;
+        grayVals[j]=g; hist[g]++;
       }
       const total=p2.length/4;
       let sum=0; for(let v=0;v<256;v++) sum+=v*hist[v];
@@ -823,12 +824,28 @@ function preprocessForOCR(dataUrl){
         const between=wB*wF*(mB-mF)*(mB-mF);
         if(between>best2){ best2=between; thr=v; }
       }
-      for(let i=0;i<p2.length;i+=4){
-        const v=p2[i]>thr ? 0 : 255;
+      // variant A: hard Otsu binarization (inverted)
+      for(let i=0,j=0;i<p2.length;i+=4,j++){
+        const v=grayVals[j]>thr ? 0 : 255;
         p2[i]=p2[i+1]=p2[i+2]=v;
       }
       ctx2.putImageData(d2,0,0);
-      res(c2.toDataURL('image/png'));
+      const binary=c2.toDataURL('image/png');
+      // variant B: contrast-stretched grayscale (inverted, no hard threshold)
+      let lo=0, hi=255, acc=0;
+      for(let v=0;v<256;v++){ acc+=hist[v]; if(acc>total*0.02){lo=v;break;} }
+      acc=0;
+      for(let v=255;v>=0;v--){ acc+=hist[v]; if(acc>total*0.02){hi=v;break;} }
+      const range=Math.max(1,hi-lo);
+      const d3=ctx2.createImageData(c2.width,c2.height), p3=d3.data;
+      for(let i=0,j=0;i<p3.length;i+=4,j++){
+        let v=Math.max(0,Math.min(255,Math.round((grayVals[j]-lo)*255/range)));
+        v=255-v;
+        p3[i]=p3[i+1]=p3[i+2]=v; p3[i+3]=255;
+      }
+      ctx2.putImageData(d3,0,0);
+      const gray=c2.toDataURL('image/png');
+      res({binary, gray});
     };
     img.onerror=()=>rej(new Error('OCR PREPROCESS FAILED'));
     img.src=dataUrl;
@@ -1016,37 +1033,70 @@ async function ocrExtract(dataUrls){
     tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/<>-*.: ',
     tessedit_pageseg_mode:'6'
   });
+  function parseAttempt(text){
+    // strict label parser first
+    const strict=parseOOOIText(text).filter(L=>L.out&&L.off&&L.on&&L.inn);
+    if(strict.length) return {legs:strict.map(L=>{L._v=true;return L;}), verified:true, filled:4};
+    const loose=parseMCDULoose(text);
+    if(loose){
+      loose.leg._v=loose.verified;
+      const filled=['out','off','on','inn'].filter(k=>loose.leg[k]).length;
+      return {legs:[loose.leg], verified:loose.verified, filled};
+    }
+    return null;
+  }
   const legs=[]; const failed=[];
   lastOCRText='';
   try{
     for(let i=0;i<dataUrls.length;i++){
       status('FREE OCR - PHOTO '+(i+1)+'/'+dataUrls.length+'...');
       const pre=await preprocessForOCR(dataUrls[i]);
-      const r=await worker.recognize(pre);
-      lastOCRText+='--- PHOTO '+(i+1)+' ---\n'+r.data.text+'\n';
-      // strict label parser first, then verified layout parser
-      let got=parseOOOIText(r.data.text).filter(L=>L.out&&L.off&&L.on&&L.inn);
-      if(!got.length){
-        const loose=parseMCDULoose(r.data.text);
-        if(loose) got=[loose.leg];
+      // pass 1: binarized
+      const r1=await worker.recognize(pre.binary);
+      lastOCRText+='--- PHOTO '+(i+1)+' (PASS 1) ---\n'+r1.data.text+'\n';
+      let bestA=parseAttempt(r1.data.text);
+      // pass 2 only if pass 1 is not verified
+      if(!bestA || !bestA.verified){
+        status('FREE OCR - PHOTO '+(i+1)+' PASS 2...');
+        const r2=await worker.recognize(pre.gray);
+        lastOCRText+='--- PHOTO '+(i+1)+' (PASS 2) ---\n'+r2.data.text+'\n';
+        const bestB=parseAttempt(r2.data.text);
+        if(bestB && (!bestA || (bestB.verified&&!bestA.verified) || (bestB.verified===(!!bestA&&bestA.verified) && bestB.filled>(bestA?bestA.filled:0)))) bestA=bestB;
       }
-      if(got.length) legs.push(...got);
+      if(bestA) legs.push(...bestA.legs);
       else failed.push(i+1);
     }
   }finally{
     await worker.terminate();
   }
-  if(failed.length&&legs.length){
+  // merge duplicate reads of the same leg across photos: prefer verified, fill gaps
+  const byKey={};
+  const merged=[];
+  for(const L of legs){
+    const k=dupKey(L);
+    if(!byKey[k]){ byKey[k]=L; merged.push(L); continue; }
+    const keep=byKey[k];
+    if(L._v && !keep._v){
+      // verified copy wins wholesale
+      Object.keys(L).forEach(kk=>keep[kk]=L[kk]);
+    }else{
+      // fill blanks from the extra copy
+      for(const kk of ['out','off','on','inn','flt','reg','from','to','date']){
+        if(!keep[kk] && L[kk]) keep[kk]=L[kk];
+      }
+    }
+  }
+  if(failed.length&&merged.length){
     setTimeout(()=>status('PHOTO'+(failed.length>1?'S':'')+' '+failed.join(', ')+' UNREADABLE (GLARE/ANGLE) - USE PASTE FOR THOSE', true), 50);
   }
   if(lastOCRText.trim()) document.getElementById('ocrDbgBtn').style.display='block';
-  if(!legs.length && lastOCRText.trim()){
+  if(!merged.length && lastOCRText.trim()){
     resetPanelMode();
     expTitle.textContent='OCR DEBUG - WHAT WAS READ';
     expText.value=lastOCRText;
     expPanel.style.display='flex';
   }
-  return legs;
+  return merged;
 }
 
 /* ================= REVIEW TICKET ================= */
@@ -1080,8 +1130,11 @@ function renderReview(){
 
 function ticketHTML(L,i){
   const f=(k,lbl,ph)=>'<div class="tfield"><label>'+lbl+'</label><input data-i="'+i+'" data-k="'+k+'" value="'+esc(L[k]==null?'':L[k])+'" placeholder="'+(ph||'')+'"></div>';
+  let badge='VERIFY &amp; CORRECT';
+  if(L._v===true) badge='<span style="color:#1a7a3a;font-weight:700">&#10003; OCR VERIFIED</span>';
+  else if(L._v===false) badge='<span style="color:#a05a00;font-weight:700">&#9888; VERIFY TIMES</span>';
   return '<div class="ticket" id="tk'+i+'">'+
-    '<div class="thead"><span>ACARS &middot; LEG '+(i+1)+'</span><span>VERIFY &amp; CORRECT</span></div>'+
+    '<div class="thead"><span>ACARS &middot; LEG '+(i+1)+'</span><span>'+badge+'</span></div>'+
     '<div class="dupbanner" data-i="'+i+'">ALREADY IN LOGBOOK &mdash; WILL BE SKIPPED (TAP TO SAVE ANYWAY)</div>'+
     '<div class="tbody">'+
       '<div class="trow">'+f('date','DATE (UTC)','YYYY-MM-DD')+f('flt','FLT')+f('reg','REG')+'</div>'+
@@ -1137,7 +1190,7 @@ saveBtn.onclick=()=>{
   toSave.forEach(L=>{
     const rec = Object.assign({ id:Date.now()+Math.random() }, L, {
       out:normT(L.out), off:normT(L.off), on:normT(L.on), inn:normT(L.inn) });
-    delete rec._dup; delete rec._save;
+    delete rec._dup; delete rec._save; delete rec._v;
     entries.push(rec);
   });
   store.set('oooi_entries', entries);
