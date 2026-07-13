@@ -883,12 +883,14 @@ function mcduTimeCand(tok){
 function parseMCDULoose(raw){
   const T=String(raw||'').toUpperCase();
   const toks=T.split(/[^A-Z0-9\/]+/).filter(Boolean);
-  // locate the DATE token (e.g. 02JUL26): the UTC clock always precedes it,
-  // real OOOI times always follow it - use it as a positional gate
+  // locate the DATE token (e.g. 02JUL26, or split as "13JUL" + "26"):
+  // the UTC clock always precedes it, real OOOI times always follow it
   let datePos=-1;
   for(let i=0;i<toks.length;i++){
     const m=toks[i].match(/(\d{1,3})([A-Z0-9]{3})(\d{2})$/);
     if(m && mcduMonth(m[2])){ datePos=i; break; }
+    const m2=toks[i].match(/^(\d{1,3})([A-Z0-9]{3})$/);
+    if(m2 && mcduMonth(m2[2]) && i+1<toks.length && /^\d{2}$/.test(toks[i+1])){ datePos=i; break; }
   }
   const cands=[];
   toks.forEach((tk,pos)=>{
@@ -943,37 +945,70 @@ function parseMCDULoose(raw){
     const strongCount=w.filter(c=>c.strong).length;
     for(const times of prod){
       for(const map of MAPS){
-        const leg={};
+        // for hole windows, try both: reconstructing the missing slot, and leaving it empty
+        const fillModes = hole>=0 ? ['fill','nofill'] : ['none'];
+        for(const fm of fillModes){
+        const leg={}, prov={};
         let ti=0;
         for(let slot=0;slot<4;slot++){
-          if(slot===hole){ leg[map[slot]]=null; }
-          else leg[map[slot]]=times[ti++];
+          const k=map[slot];
+          if(slot===hole){ leg[k]=null; prov[k]='hole'; }
+          else{ leg[k]=times[ti]; prov[k]=w[ti].strong?'s':'w'; ti++; }
         }
-        if(hole>=0){
-          // reconstruct the missing slot from durations
+        if(fm==='fill'){
           const k=map[hole];
-          if(k==='out' && leg.inn!=null && blockDur!=null) leg.out=addMin(leg.inn,-blockDur);
-          else if(k==='inn' && leg.out!=null && blockDur!=null) leg.inn=addMin(leg.out, blockDur);
-          else if(k==='off' && leg.on!=null && (flightDur!=null||blockDur!=null)) leg.off=addMin(leg.on,-(flightDur!=null?flightDur:blockDur));
-          else if(k==='on' && leg.off!=null && (flightDur!=null||blockDur!=null)) leg.on=addMin(leg.off,(flightDur!=null?flightDur:blockDur));
+          if(k==='out' && leg.inn!=null && blockDur!=null){ leg.out=addMin(leg.inn,-blockDur); prov.out='f'; }
+          else if(k==='inn' && leg.out!=null && blockDur!=null){ leg.inn=addMin(leg.out, blockDur); prov.inn='f'; }
+          else if(k==='off' && leg.on!=null && (flightDur!=null||blockDur!=null)){ leg.off=addMin(leg.on,-(flightDur!=null?flightDur:blockDur)); prov.off='f'; }
+          else if(k==='on' && leg.off!=null && (flightDur!=null||blockDur!=null)){ leg.on=addMin(leg.off,(flightDur!=null?flightDur:blockDur)); prov.on='f'; }
           else continue;
         }
         const blk=diffMin(leg.out,leg.inn), flt=diffMin(leg.off,leg.on);
+        const taxiOut=diffMin(leg.out,leg.off), taxiIn=diffMin(leg.on,leg.inn);
+        const blockFilled=(prov.out==='f'||prov.inn==='f');
+        const flightFilled=(prov.off==='f'||prov.on==='f');
+        const blockExact=(blk!=null&&durs.includes(blk)&&!blockFilled);
+        const flightExact=(flt!=null&&durs.includes(flt)&&!flightFilled);
+        const near=(v)=>v!=null&&durs.some(d=>Math.abs(d-v)<=15);
+        const blockNear=!blockFilled&&near(blk), flightNear=!flightFilled&&near(flt);
+        const taxiPlaus=(taxiOut==null||((taxiOut>0)&&taxiOut<=120)) && (taxiIn==null||(taxiIn>=0&&taxiIn<=90));
         let score=strongCount;
-        const blockOK=(blk!=null&&durs.includes(blk));
-        const flightOK=(flt!=null&&durs.includes(flt));
-        if(blockOK) score+=3;
-        if(flightOK) score+=3;
+        if(blockExact) score+=3; else if(blockNear) score+=2; else if(blockFilled) score+=1;
+        if(flightExact) score+=3; else if(flightNear) score+=2; else if(flightFilled) score+=1;
+        // physical plausibility: taxi times
+        if(taxiOut!=null){ if(taxiOut>0&&taxiOut<=120) score+=2; else score-=3; }
+        if(taxiIn!=null){ if(taxiIn>=0&&taxiIn<=90) score+=2; else score-=3; }
+        if(blk!=null&&flt!=null){ if(blk>=flt) score+=1; else score-=3; }
         if(map===MAPS[0]) score+=1;
-        if(blk!=null&&flt!=null&&blk>=flt) score+=1;
-        if(hole>=0) score-=1; // prefer full reads over reconstructions
-        if(!best||score>best.score) best={score,leg,durs,strongCount,blockOK,flightOK,blockDur,flightDur};
+        if(hole>=0) score-=1;
+        // penalize weak candidates occupying slots (UTC clock, durations misplaced as times)
+        for(const k of ['out','off','inn','on']) if(prov[k]==='w') score-=1;
+        if(!best||score>best.score) best={score,leg,prov,durs,strongCount,blockExact,flightExact,blockFilled,flightFilled,blockNear,flightNear,taxiPlaus,blockDur,flightDur};
+        }
       }
     }
   }
   if(!best) return null;
-  const verified=!!(best.durs.length&&best.score>=best.strongCount+4);
+  // Per-pair trust:
+  //  - exact duration match (not self-filled) -> trusted
+  //  - filled pair -> trusted if the OTHER pair exact-matched, or near-matched with plausible taxi times
+  //  - both slots strong-read AND some pair in this leg exact-matched -> trusted
+  const anyExact=best.blockExact||best.flightExact;
+  const blockStrong=(best.prov.out==='s'&&best.prov.inn==='s');
+  const flightStrong=(best.prov.off==='s'&&best.prov.on==='s');
+  const blockTrust = best.blockExact || (best.blockFilled&&(best.flightExact||(best.flightNear&&best.taxiPlaus))) || (blockStrong&&anyExact);
+  const flightTrust = best.flightExact || (best.flightFilled&&(best.blockExact||(best.blockNear&&best.taxiPlaus))) || (flightStrong&&anyExact);
+  const verified = !!(blockTrust&&flightTrust);
   if(!verified && best.strongCount<3) return null; // too unreliable, don't guess
+  // Honesty: in untrusted pairs, blank anything that wasn't a strong read
+  if(!blockTrust){
+    if(best.prov.out!=='s') best.leg.out=null;
+    if(best.prov.inn!=='s') best.leg.inn=null;
+  }
+  if(!flightTrust){
+    if(best.prov.off!=='s') best.leg.off=null;
+    if(best.prov.on!=='s') best.leg.on=null;
+  }
 
   let flt='';
   const firstPos=windows[0].w[0].pos;
@@ -1012,9 +1047,14 @@ function parseMCDULoose(raw){
   }
   if(!date) date=new Date().toISOString().slice(0,10);
   let remarks='';
-  if(!verified) remarks='OCR UNVERIFIED - CHECK TIMES';
-  else if(best.blockOK&&!best.flightOK&&best.flightDur!=null) remarks='CHECK OFF/ON - MCDU FLIGHT '+fmtMin(best.flightDur).replace(':','')+'';
-  else if(best.flightOK&&!best.blockOK&&best.blockDur!=null) remarks='CHECK OUT/IN - MCDU BLOCK '+fmtMin(best.blockDur).replace(':','')+'';
+  if(!verified){
+    const missing=['out','off','on','inn'].filter(k=>!best.leg[k]);
+    remarks = missing.length
+      ? 'NOT READ: '+missing.join('/').toUpperCase()+' - SEE PRINTOUT'
+      : 'OCR UNVERIFIED - CHECK TIMES';
+  }
+  else if(best.blockExact&&!best.flightExact) remarks='CHECK OFF/ON VS PRINTOUT';
+  else if(best.flightExact&&!best.blockExact) remarks='CHECK OUT/IN VS PRINTOUT';
   return {
     leg:{date, flt, reg:'', type:settings.type||'', from, to,
       out:best.leg.out||'', off:best.leg.off||'', on:best.leg.on||'', inn:best.leg.inn||'',
