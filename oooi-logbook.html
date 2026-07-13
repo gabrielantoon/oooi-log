@@ -301,6 +301,7 @@
     <div class="preview" id="preview" style="display:none"></div>
     <button class="btn" id="readBtn" style="display:none">READ&nbsp;OOOI</button>
     <button class="btn ghost" id="clearBtn" style="display:none">CLEAR PHOTOS</button>
+    <button class="btn ghost" id="ocrDbgBtn" style="display:none">VIEW OCR TEXT</button>
     <div class="status" id="status"></div>
     <div id="review"></div>
     <button class="btn" id="saveBtn" style="display:none">SAVE&nbsp;TO&nbsp;LOGBOOK</button>
@@ -487,6 +488,13 @@ clearBtn.onclick=()=>{
   reviewEl.innerHTML=''; saveBtn.style.display='none';
   status('');
   renderThumbs();
+};
+
+document.getElementById('ocrDbgBtn').onclick=()=>{
+  resetPanelMode();
+  expTitle.textContent='OCR DEBUG - WHAT WAS READ';
+  expText.value=lastOCRText||'(no OCR run yet)';
+  expPanel.style.display='flex';
 };
 
 function readAsDataURL(file){
@@ -858,9 +866,17 @@ function mcduTimeCand(tok){
 function parseMCDULoose(raw){
   const T=String(raw||'').toUpperCase();
   const toks=T.split(/[^A-Z0-9\/]+/).filter(Boolean);
+  // locate the DATE token (e.g. 02JUL26): the UTC clock always precedes it,
+  // real OOOI times always follow it - use it as a positional gate
+  let datePos=-1;
+  for(let i=0;i<toks.length;i++){
+    const m=toks[i].match(/(\d{1,3})([A-Z0-9]{3})(\d{2})$/);
+    if(m && mcduMonth(m[2])){ datePos=i; break; }
+  }
   const cands=[];
   toks.forEach((tk,pos)=>{
     if(tk.includes('/')) return;
+    if(datePos>=0 && pos<datePos) return; // UTC clock / page-number territory
     const c=mcduTimeCand(tk);
     if(c&&c.interps.length) cands.push({pos, strong:c.strong, interps:c.interps});
   });
@@ -986,6 +1002,7 @@ async function ocrExtract(dataUrls){
   if(failed.length&&legs.length){
     setTimeout(()=>status('PHOTO'+(failed.length>1?'S':'')+' '+failed.join(', ')+' UNREADABLE (GLARE/ANGLE) - USE PASTE FOR THOSE', true), 50);
   }
+  if(lastOCRText.trim()) document.getElementById('ocrDbgBtn').style.display='block';
   if(!legs.length && lastOCRText.trim()){
     resetPanelMode();
     expTitle.textContent='OCR DEBUG - WHAT WAS READ';
