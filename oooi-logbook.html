@@ -620,6 +620,7 @@ function mapAIFlight(f){
 async function aiVisionExtract(dataUrls, cfg){
   // cfg: {label, url, key, models:[...]} - OpenAI-compatible chat completions with vision
   const legs=[];
+  lastOCRText='';
   let model=cfg.models[0];
   for(let i=0;i<dataUrls.length;i++){
     status(cfg.label+' - PHOTO '+(i+1)+'/'+dataUrls.length+'...');
@@ -653,8 +654,11 @@ async function aiVisionExtract(dataUrls, cfg){
     }
     if(!done) throw new Error(lastErr||cfg.label+' - NO USABLE MODEL');
     const data=await resp.json();
-    const txt=(data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content)||'';
-    const m=txt.match(/\{[\s\S]*\}/);
+    let txt=(data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content)||'';
+    if(Array.isArray(txt)) txt=txt.map(p=>p.text||'').join('');
+    lastOCRText+='--- '+cfg.label+' ('+model+') PHOTO '+(i+1)+' RESPONSE ---\n'+(txt||'(empty response)')+'\n';
+    document.getElementById('ocrDbgBtn').style.display='block';
+    const m=String(txt).match(/\{[\s\S]*\}/);
     if(!m) continue;
     try{
       const parsed=JSON.parse(m[0]);
@@ -1368,8 +1372,10 @@ saveBtn.onclick=()=>{
   camIn.value=''; camLive.value='';
   status('');
   document.querySelector('nav button[data-pg="logbook"]').click();
+  const staleBackup = entries.length>0 && (!settings.lastBackup || (Date.now()-settings.lastBackup)>3*86400000);
   document.getElementById('scanMsg').textContent =
-    'SAVED '+toSave.length+' LEG'+(toSave.length>1?'S':'')+(skipped?' - SKIPPED '+skipped+' DUPLICATE'+(skipped>1?'S':''):'');
+    'SAVED '+toSave.length+' LEG'+(toSave.length>1?'S':'')+(skipped?' - SKIPPED '+skipped+' DUPLICATE'+(skipped>1?'S':''):'')
+    +(staleBackup?' - BACKUP RECOMMENDED: TAP EXPORT BACKUP BELOW':'');
   updateFMA();
 };
 
@@ -1528,6 +1534,7 @@ document.getElementById('csvBtn').onclick=()=>{
 
 /* ================= BACKUP / RESTORE ================= */
 document.getElementById('backupBtn').onclick=()=>{
+  settings.lastBackup=Date.now(); store.set('oooi_settings',settings);
   const payload={ app:'oooi-log', version:1, exported:new Date().toISOString(),
     entries, settings:{ type:settings.type } }; // API key deliberately excluded
   exportFile('oooi-backup-'+new Date().toISOString().slice(0,10)+'.json',
