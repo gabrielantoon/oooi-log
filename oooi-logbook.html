@@ -342,15 +342,14 @@
       <div class="note">CARs flight time limits - 112 h / 28 days, 1000 h / 365 days</div>
     </div>
 
-    <div class="set">
+    <button class="btn ghost" id="setToggle" style="margin-top:20px">SETTINGS</button>
+    <div class="set" id="setPanel" style="display:none;margin-top:6px">
       <label for="setType">DEFAULT AIRCRAFT TYPE</label>
       <input id="setType" placeholder="A321">
-      <label for="setGemini">GEMINI API KEY (FREE - aistudio.google.com, no card needed)</label>
+      <label>GEMINI API KEY <span id="keyState" style="color:var(--grn)"></span></label>
+      <div class="note" id="keyNote" style="margin:2px 0 6px">Free at aistudio.google.com - no card needed.</div>
+      <button class="btn ghost" id="keyChangeBtn" style="display:none;margin-top:0">CHANGE KEY</button>
       <input id="setGemini" type="password" placeholder="AIza..." autocomplete="off">
-      <label for="setGroq">GROQ API KEY (FREE - console.groq.com, no card needed)</label>
-      <input id="setGroq" type="password" placeholder="gsk_..." autocomplete="off">
-      <label for="setKey">ANTHROPIC API KEY (optional - best accuracy, ~1&cent;/scan)</label>
-      <input id="setKey" type="password" placeholder="sk-ant-..." autocomplete="off">
     </div>
   </section>
 </main>
@@ -1620,12 +1619,40 @@ function setBar(barId,lblId,val,max){
 }
 
 /* ================= SETTINGS + FMA ================= */
-const setType=document.getElementById('setType'), setKey=document.getElementById('setKey'), setGroq=document.getElementById('setGroq'), setGemini=document.getElementById('setGemini');
-setType.value=settings.type||''; setKey.value=settings.key||''; setGroq.value=settings.groqKey||''; setGemini.value=settings.geminiKey||'';
+const setType=document.getElementById('setType'), setGemini=document.getElementById('setGemini'),
+      setPanel=document.getElementById('setPanel'), setToggle=document.getElementById('setToggle'),
+      keyState=document.getElementById('keyState'), keyChangeBtn=document.getElementById('keyChangeBtn'),
+      keyNote=document.getElementById('keyNote');
+setType.value=settings.type||'';
 setType.oninput=()=>{settings.type=setType.value.trim(); store.set('oooi_settings',settings);};
-setKey.oninput=()=>{settings.key=setKey.value.trim(); store.set('oooi_settings',settings);};
-setGroq.oninput=()=>{settings.groqKey=setGroq.value.trim(); store.set('oooi_settings',settings);};
 setGemini.oninput=()=>{settings.geminiKey=setGemini.value.trim(); store.set('oooi_settings',settings);};
+
+setToggle.onclick=()=>{
+  const open=setPanel.style.display!=='none';
+  setPanel.style.display=open?'none':'block';
+  if(!open) refreshKeyUI();
+};
+function refreshKeyUI(){
+  if(settings.geminiKey){
+    keyState.innerHTML='&#10003; CONFIGURED';
+    keyNote.style.display='none';
+    setGemini.style.display='none';
+    setGemini.value='';
+    keyChangeBtn.style.display='block';
+  }else{
+    keyState.textContent='';
+    keyNote.style.display='block';
+    setGemini.style.display='block';
+    keyChangeBtn.style.display='none';
+  }
+}
+keyChangeBtn.onclick=()=>{
+  keyChangeBtn.style.display='none';
+  keyNote.style.display='block';
+  setGemini.style.display='block';
+  setGemini.value='';
+  setGemini.focus();
+};
 
 function updateFMA(){
   const blk=entries.reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
