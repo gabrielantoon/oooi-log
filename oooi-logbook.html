@@ -683,12 +683,37 @@ async function aiVisionExtract(dataUrls, cfg){
   }
   return legs;
 }
+const GEMINI_URL='https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
+const GEMINI_FALLBACK_MODELS=['gemini-flash-latest','gemini-3-flash','gemini-2.5-flash','gemini-flash-lite-latest','gemini-2.5-flash-lite'];
+function geminiModels(){
+  return (settings.geminiModels&&settings.geminiModels.length)?settings.geminiModels:GEMINI_FALLBACK_MODELS;
+}
+async function discoverGeminiModels(){
+  const r=await fetch('https://generativelanguage.googleapis.com/v1beta/openai/models',{
+    headers:{'Authorization':'Bearer '+settings.geminiKey}
+  });
+  if(!r.ok) throw new Error('MODEL LIST ERROR '+r.status);
+  const data=await r.json();
+  const ids=(data.data||[]).map(m=>String(m.id||'').replace(/^models\//,''))
+    .filter(id=>/gemini/.test(id)&&/flash/.test(id)&&!/image|audio|tts|embed|live|thinking/.test(id));
+  // prefer full flash over lite, newer-looking names first
+  ids.sort((a,b)=>{
+    const la=/lite/.test(a)?1:0, lb=/lite/.test(b)?1:0;
+    if(la!==lb) return la-lb;
+    return b.localeCompare(a);
+  });
+  if(ids.length){
+    settings.geminiModels=ids.slice(0,4);
+    store.set('oooi_settings',settings);
+  }
+  return ids;
+}
 function geminiExtract(dataUrls){
   return aiVisionExtract(dataUrls,{
     label:'GEMINI VISION',
-    url:'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+    url:GEMINI_URL,
     key:settings.geminiKey,
-    models:['gemini-flash-latest','gemini-3-flash','gemini-2.5-flash','gemini-flash-lite-latest','gemini-2.5-flash-lite']
+    models:geminiModels()
   });
 }
 function groqExtract(dataUrls){
@@ -1676,7 +1701,7 @@ document.getElementById('keyTestBtn').onclick=async ()=>{
   if(!settings.geminiKey){ keyState.style.color='var(--red)'; keyState.textContent='NO KEY SAVED'; return; }
   keyState.style.color='var(--amb)'; keyState.textContent='TESTING...';
   let sawRateLimit=false;
-  const models=['gemini-flash-latest','gemini-3-flash','gemini-2.5-flash','gemini-flash-lite-latest','gemini-2.5-flash-lite'];
+  const models=geminiModels();
   try{
     for(const m of models){
       const r=await fetch('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',{
@@ -1691,10 +1716,25 @@ document.getElementById('keyTestBtn').onclick=async ()=>{
         keyState.style.color='var(--red)'; keyState.textContent='ERROR '+r.status+msg; return;
       }
     }
-    keyState.style.color='var(--amb)';
-    keyState.textContent = sawRateLimit
-      ? 'KEY VALID - RATE LIMITED, WAIT 2 MIN AND RETRY'
-      : 'NO WORKING MODEL - REPORT THIS';
+    if(sawRateLimit){
+      keyState.style.color='var(--amb)';
+      keyState.textContent='KEY VALID - RATE LIMITED, WAIT 2 MIN AND RETRY';
+      return;
+    }
+    keyState.style.color='var(--amb)'; keyState.textContent='ASKING GOOGLE FOR MODELS...';
+    try{
+      const ids=await discoverGeminiModels();
+      if(!ids.length){ keyState.style.color='var(--red)'; keyState.textContent='KEY WORKS BUT NO FLASH MODELS FOUND'; return; }
+      const r2=await fetch(GEMINI_URL,{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+settings.geminiKey},
+        body:JSON.stringify({model:ids[0],max_tokens:5,messages:[{role:'user',content:'hi'}]})
+      });
+      if(r2.ok){ keyState.style.color='var(--grn)'; keyState.innerHTML='&#10003; KEY OK ('+ids[0]+') - AUTO-CONFIGURED'; return; }
+      keyState.style.color='var(--amb)'; keyState.textContent='FOUND '+ids.length+' MODELS, TEST GOT '+r2.status+' - RETRY IN 2 MIN';
+    }catch(e){
+      keyState.style.color='var(--red)'; keyState.textContent='MODEL DISCOVERY FAILED - '+e.message;
+    }
   }catch(e){
     keyState.style.color='var(--red)'; keyState.textContent='CALL BLOCKED - '+e.message;
   }
