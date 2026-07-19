@@ -565,6 +565,7 @@ function status(msg,err){
 readBtn.onclick=async ()=>{
   if(!pendingImgs.length) return;
   readBtn.disabled=true;
+  window.__aiFailMsg=null;
   status('PARSING ACARS DATA...');
   try{
     let legs;
@@ -622,6 +623,7 @@ async function aiVisionExtract(dataUrls, cfg){
   const legs=[];
   lastOCRText='';
   let model=cfg.models[0];
+  let aiRetried=false;
   for(let i=0;i<dataUrls.length;i++){
     status(cfg.label+' - PHOTO '+(i+1)+'/'+dataUrls.length+'...');
     let resp, lastErr='';
@@ -649,8 +651,16 @@ async function aiVisionExtract(dataUrls, cfg){
       let detail='';
       try{ const eb=await resp.json(); detail=(eb.error&&eb.error.message)?(' - '+eb.error.message):''; }catch(e){}
       lastErr=cfg.label+' ERROR '+resp.status+detail;
-      // model unavailable? try the next name in the cascade
-      if(!(resp.status===404||resp.status===400)) throw new Error(lastErr);
+      // 404/400: model renamed - try next. 429: rate limited - next model has its own quota
+      if(!(resp.status===404||resp.status===400||resp.status===429)) throw new Error(lastErr);
+      if(resp.status===429 && mi===cfg.models.length-1){
+        // all models throttled: one patient retry on the first model
+        status(cfg.label+' RATE LIMITED - RETRYING IN 5S...');
+        await new Promise(r=>setTimeout(r,5000));
+        mi=-1; model=cfg.models[0];
+        if(!aiRetried){ aiRetried=true; continue; }
+        throw new Error(lastErr);
+      }
     }
     if(!done) throw new Error(lastErr||cfg.label+' - NO USABLE MODEL');
     const data=await resp.json();
