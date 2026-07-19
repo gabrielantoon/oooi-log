@@ -287,7 +287,7 @@
       </div>
       <div class="droppad" id="padLib" tabindex="0" role="button" aria-label="Pick OOOI photos from your library">
         <div class="big">+ PHOTOS</div>
-        <div class="sub">Pick from your library.<br>Up to 6 at once.</div>
+        <div class="sub">Pick from your library.<br>Up to 15 at once.</div>
       </div>
     </div>
     <input type="file" id="camLive" accept="image/*" capture="environment">
@@ -386,7 +386,7 @@ const store = (()=>{
 
 let entries = store.get('oooi_entries', []);
 let settings = store.get('oooi_settings', { type:'A321', key:'', groqKey:'', geminiKey:'' });
-let pendingImgs = [];        // 1568px jpeg dataURLs (AI path + thumbnails)
+let pendingImgs = [];        // 1568px jpeg dataURLs (AI path + thumbnails), max 15/batch
 let pendingSrcs = [];        // native-resolution source blobs (free OCR path)
 let pendingLegs = [];        // parsed legs awaiting confirmation
 
@@ -455,8 +455,8 @@ async function handleFiles(files, append){
   if(!files.length) return;
   status('');
   if(!append){ pendingImgs=[]; pendingSrcs=[]; }
-  const room = 6 - pendingImgs.length;
-  if(room<=0){ status('MAX 6 PHOTOS PER BATCH - save or clear first.', true); return; }
+  const room = 15 - pendingImgs.length;
+  if(room<=0){ status('MAX 15 PHOTOS PER BATCH - save or clear first.', true); return; }
   files = files.slice(0, room);
   for(let n=0;n<files.length;n++){
     status('LOADING PHOTO '+(n+1)+'/'+files.length+'...');
