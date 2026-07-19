@@ -345,7 +345,11 @@
     <div class="set">
       <label for="setType">DEFAULT AIRCRAFT TYPE</label>
       <input id="setType" placeholder="A321">
-      <label for="setKey">ANTHROPIC API KEY (only needed when self-hosted, e.g. Netlify)</label>
+      <label for="setGemini">GEMINI API KEY (FREE - aistudio.google.com, no card needed)</label>
+      <input id="setGemini" type="password" placeholder="AIza..." autocomplete="off">
+      <label for="setGroq">GROQ API KEY (FREE - console.groq.com, no card needed)</label>
+      <input id="setGroq" type="password" placeholder="gsk_..." autocomplete="off">
+      <label for="setKey">ANTHROPIC API KEY (optional - best accuracy, ~1&cent;/scan)</label>
       <input id="setKey" type="password" placeholder="sk-ant-..." autocomplete="off">
     </div>
   </section>
@@ -381,8 +385,9 @@ const store = (()=>{
 })();
 
 let entries = store.get('oooi_entries', []);
-let settings = store.get('oooi_settings', { type:'A321', key:'' });
-let pendingImgs = [];        // dataURL jpegs (up to 6 per batch)
+let settings = store.get('oooi_settings', { type:'A321', key:'', groqKey:'', geminiKey:'' });
+let pendingImgs = [];        // 1568px jpeg dataURLs (AI path + thumbnails)
+let pendingSrcs = [];        // native-resolution source blobs (free OCR path)
 let pendingLegs = [];        // parsed legs awaiting confirmation
 
 /* ================= TIME HELPERS ================= */
@@ -449,14 +454,16 @@ camIn.onchange  =e=>{ handleFiles([...e.target.files], false); camIn.value='';  
 async function handleFiles(files, append){
   if(!files.length) return;
   status('');
-  if(!append){ pendingImgs=[]; }
+  if(!append){ pendingImgs=[]; pendingSrcs=[]; }
   const room = 6 - pendingImgs.length;
   if(room<=0){ status('MAX 6 PHOTOS PER BATCH - save or clear first.', true); return; }
   files = files.slice(0, room);
   for(let n=0;n<files.length;n++){
     status('LOADING PHOTO '+(n+1)+'/'+files.length+'...');
     try{
-      pendingImgs.push(await downscale(files[n]));
+      const r = await downscale(files[n]);
+      pendingImgs.push(r.url);
+      pendingSrcs.push(r.src);
     }catch(err){
       status('PHOTO '+(n+1)+': '+err.message, true);
       renderThumbs();
@@ -484,7 +491,7 @@ function renderThumbs(){
 }
 
 clearBtn.onclick=()=>{
-  pendingImgs=[]; pendingLegs=[];
+  pendingImgs=[]; pendingSrcs=[]; pendingLegs=[];
   reviewEl.innerHTML=''; saveBtn.style.display='none';
   status('');
   renderThumbs();
@@ -527,7 +534,7 @@ async function heicToJpeg(file){
   return Array.isArray(out)?out[0]:out;
 }
 async function downscale(file){
-  let img;
+  let img, src=file;
   try{
     img = await loadImg(await readAsDataURL(file));
   }catch(e){
@@ -535,6 +542,7 @@ async function downscale(file){
     status('CONVERTING HEIC...');
     try{
       const jpeg = await heicToJpeg(file);
+      src = jpeg;
       img = await loadImg(await readAsDataURL(jpeg));
     }catch(e2){
       throw new Error('UNSUPPORTED IMAGE FORMAT ('+(file.type||'unknown')+'). Workaround: take a screenshot of the photo and upload the screenshot (it will be a standard format).');
@@ -545,7 +553,7 @@ async function downscale(file){
   if(Math.max(w,h)>MAX){ const s=MAX/Math.max(w,h); w=Math.round(w*s); h=Math.round(h*s); }
   const c=document.createElement('canvas'); c.width=w; c.height=h;
   c.getContext('2d').drawImage(img,0,0,w,h);
-  return c.toDataURL('image/jpeg',0.85);
+  return {url:c.toDataURL('image/jpeg',0.85), src};
 }
 
 function status(msg,err){
@@ -560,12 +568,23 @@ readBtn.onclick=async ()=>{
   status('PARSING ACARS DATA...');
   try{
     let legs;
-    try{
-      legs = await extractOOOI(pendingImgs);       // AI: keyless in claude.ai, keyed if set
-    }catch(apiErr){
-      if(settings.key) throw apiErr;               // key set but call failed: show real error
-      // no key and AI unavailable -> free on-device OCR
-      legs = await ocrExtract(pendingImgs);
+    if(settings.key){
+      legs = await extractOOOI(pendingImgs);         // Anthropic (paid, most accurate)
+    }else if(settings.geminiKey||settings.groqKey){
+      try{
+        legs = settings.geminiKey
+          ? await geminiExtract(pendingImgs)          // Gemini (free vision AI)
+          : await groqExtract(pendingImgs);           // Groq (free vision AI)
+      }catch(aiErr){
+        status(aiErr.message+' - FALLING BACK TO ON-DEVICE OCR...', true);
+        legs = await ocrExtract(pendingImgs, pendingSrcs);
+      }
+    }else{
+      try{
+        legs = await extractOOOI(pendingImgs);       // keyless works in claude.ai preview
+      }catch(apiErr){
+        legs = await ocrExtract(pendingImgs, pendingSrcs);  // free on-device OCR
+      }
     }
     if(!legs.length) throw new Error('No flight data found. Try sharper, straight-on shots of the OOOI page - or use PASTE PRINTOUT TEXT, which is the most reliable free path.');
     pendingLegs = legs;
@@ -576,6 +595,97 @@ readBtn.onclick=async ()=>{
   }
   readBtn.disabled=false;
 };
+
+function oooiPromptText(n){
+  return 'These are '+n+' photo(s) of the Airbus MCDU "AOC OOOI STATUS" page (or similar ACARS printouts). The page shows: FLIGHT ID (e.g. TS0440), ORIG/DEST as ICAO pair (e.g. CYUL/CYYZ), DATE (e.g. 02JUL26), and four Z-suffixed UTC times in a two-column layout: OUT and OFF on one row, IN and ON below. It also shows BLOCK and FLIGHT durations - do NOT confuse these durations with the OOOI times. Ignore the RETURN/UTC clock line and any radio frequencies.\n\nExtract EVERY flight leg visible across ALL photos. If the same leg appears in two photos, include it only once.\n\nRespond with ONLY valid JSON, no markdown fences, no commentary:\n{"flights":[{"date":"YYYY-MM-DD or null","flight_number":"e.g. TS0440 or null","registration":"e.g. C-GOIH or null","from":"ICAO code or null","to":"ICAO code or null","out":"HHMM","off":"HHMM","on":"HHMM","in":"HHMM"}]}\n\nList legs in chronological order. Times as 4 digits without the Z (e.g. "2014"). Use null for anything unreadable. Sanity check each leg: IN minus OUT should equal the BLOCK duration shown, and ON minus OFF should equal the FLIGHT duration shown.';
+}
+function mapAIFlight(f){
+  return {
+    date: f.date || new Date().toISOString().slice(0,10),
+    flt: f.flight_number || '',
+    reg: f.registration || '',
+    type: settings.type || '',
+    from: (f.from||'').toUpperCase(),
+    to: (f.to||'').toUpperCase(),
+    out: normT(f.out), off: normT(f.off), on: normT(f.on), inn: normT(f.in),
+    ldg: 1, night: '', role:'PF', remarks:''
+  };
+}
+
+async function aiVisionExtract(dataUrls, cfg){
+  // cfg: {label, url, key, models:[...]} - OpenAI-compatible chat completions with vision
+  const legs=[];
+  let model=cfg.models[0];
+  for(let i=0;i<dataUrls.length;i++){
+    status(cfg.label+' - PHOTO '+(i+1)+'/'+dataUrls.length+'...');
+    let resp, lastErr='';
+    let done=false;
+    for(let mi=cfg.models.indexOf(model); mi<cfg.models.length && !done; mi++){
+      model=cfg.models[mi];
+      try{
+        resp=await fetch(cfg.url,{
+          method:'POST',
+          headers:{'Content-Type':'application/json','Authorization':'Bearer '+cfg.key},
+          body:JSON.stringify({
+            model,
+            temperature:0,
+            max_tokens:600,
+            messages:[{role:'user',content:[
+              {type:'text',text:oooiPromptText(1)},
+              {type:'image_url',image_url:{url:dataUrls[i]}}
+            ]}]
+          })
+        });
+      }catch(netErr){
+        throw new Error(cfg.label+' CALL BLOCKED - check connection or key.');
+      }
+      if(resp.ok){ done=true; break; }
+      let detail='';
+      try{ const eb=await resp.json(); detail=(eb.error&&eb.error.message)?(' - '+eb.error.message):''; }catch(e){}
+      lastErr=cfg.label+' ERROR '+resp.status+detail;
+      // model unavailable? try the next name in the cascade
+      if(!(resp.status===404||resp.status===400)) throw new Error(lastErr);
+    }
+    if(!done) throw new Error(lastErr||cfg.label+' - NO USABLE MODEL');
+    const data=await resp.json();
+    const txt=(data.choices&&data.choices[0]&&data.choices[0].message&&data.choices[0].message.content)||'';
+    const m=txt.match(/\{[\s\S]*\}/);
+    if(!m) continue;
+    try{
+      const parsed=JSON.parse(m[0]);
+      (parsed.flights||[]).forEach(f=>{
+        const L=mapAIFlight(f);
+        if(L.out&&L.off&&L.on&&L.inn&&!legPlausibleAI(L)){
+          L.remarks='CHECK TIMES VS PRINTOUT'; L._v=false;
+        }
+        legs.push(L);
+      });
+    }catch(e){}
+  }
+  return legs;
+}
+function geminiExtract(dataUrls){
+  return aiVisionExtract(dataUrls,{
+    label:'GEMINI VISION',
+    url:'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+    key:settings.geminiKey,
+    models:['gemini-3-flash','gemini-2.5-flash','gemini-3.1-flash-lite','gemini-2.5-flash-lite']
+  });
+}
+function groqExtract(dataUrls){
+  return aiVisionExtract(dataUrls,{
+    label:'GROQ VISION',
+    url:'https://api.groq.com/openai/v1/chat/completions',
+    key:settings.groqKey,
+    models:['meta-llama/llama-4-scout-17b-16e-instruct','meta-llama/llama-4-maverick-17b-128e-instruct']
+  });
+}
+function legPlausibleAI(L){
+  const blk=diffMin(L.out,L.inn), flt=diffMin(L.off,L.on);
+  const tOut=diffMin(L.out,L.off), tIn=diffMin(L.on,L.inn);
+  if(blk==null||flt==null) return false;
+  return blk>=flt && blk<=960 && tOut>0 && tOut<=120 && tIn>=0 && tIn<=90;
+}
 
 async function extractOOOI(dataUrls){
   const headers = {'Content-Type':'application/json'};
@@ -588,8 +698,7 @@ async function extractOOOI(dataUrls){
     type:'image',
     source:{type:'base64',media_type:'image/jpeg',data:u.split(',')[1]}
   }));
-  content.push({type:'text',text:
-'These are '+dataUrls.length+' photo(s) of the Airbus MCDU "AOC OOOI STATUS" page (or similar ACARS printouts). The page shows: FLIGHT ID (e.g. TS0440), ORIG/DEST as ICAO pair (e.g. CYUL/CYYZ), DATE (e.g. 02JUL26), and four Z-suffixed UTC times in a two-column layout: OUT and OFF on one row, IN and ON below. It also shows BLOCK and FLIGHT durations - do NOT confuse these durations with the OOOI times. Ignore the RETURN/UTC clock line and any radio frequencies.\n\nExtract EVERY flight leg visible across ALL photos. If the same leg appears in two photos, include it only once.\n\nRespond with ONLY valid JSON, no markdown fences, no commentary:\n{"flights":[{"date":"YYYY-MM-DD or null","flight_number":"e.g. TS0440 or null","registration":"e.g. C-GOIH or null","from":"ICAO code or null","to":"ICAO code or null","out":"HHMM","off":"HHMM","on":"HHMM","in":"HHMM"}]}\n\nList legs in chronological order. Times as 4 digits without the Z (e.g. "2014"). Use null for anything unreadable. Sanity check each leg: IN minus OUT should equal the BLOCK duration shown, and ON minus OFF should equal the FLIGHT duration shown.'});
+  content.push({type:'text',text:oooiPromptText(dataUrls.length)});
   let resp;
   try{
     resp = await fetch('https://api.anthropic.com/v1/messages',{
@@ -616,16 +725,7 @@ async function extractOOOI(dataUrls){
   let parsed;
   try{ parsed = JSON.parse(m[0]); }
   catch(e){ throw new Error('MODEL RESPONSE UNREADABLE - try a sharper photo.'); }
-  return (parsed.flights||[]).map(f=>({
-    date: f.date || new Date().toISOString().slice(0,10),
-    flt: f.flight_number || '',
-    reg: f.registration || '',
-    type: settings.type || '',
-    from: (f.from||'').toUpperCase(),
-    to: (f.to||'').toUpperCase(),
-    out: normT(f.out), off: normT(f.off), on: normT(f.on), inn: normT(f.in),
-    ldg: 1, night: '', role:'PF', remarks:''
-  }));
+  return (parsed.flights||[]).map(mapAIFlight);
 }
 
 /* ================= LOCAL TEXT PARSER (free, no API) =================
@@ -744,111 +844,123 @@ async function ensureTesseract(){
   if(window.Tesseract) return;
   await loadScript('https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.0/tesseract.min.js');
 }
-function preprocessForOCR(dataUrl){
+function preprocessForOCR(src){
+  // src: native-resolution Blob (preferred) or dataURL string fallback
   return new Promise((res,rej)=>{
+    const objUrl = (typeof src==='string') ? null : URL.createObjectURL(src);
     const img=new Image();
     img.onload=()=>{
-      const c=document.createElement('canvas');
-      c.width=img.width; c.height=img.height;
-      const ctx=c.getContext('2d');
-      ctx.drawImage(img,0,0);
-      const d=ctx.getImageData(0,0,c.width,c.height), px=d.data, W=c.width, H=c.height;
-
-      // Green/cyan glow density per row and column
-      const rowd=new Array(H).fill(0), cold=new Array(W).fill(0);
-      let hits=0, minX=W,minY=H,maxX=0,maxY=0;
-      for(let y=0;y<H;y+=2){
-        for(let x=0;x<W;x+=2){
-          const i=(y*W+x)*4, r=px[i], g=px[i+1], b=px[i+2];
-          if(g>70 && g>1.25*r && g>1.1*b){
-            rowd[y]++; cold[x]++; hits++;
-            if(x<minX)minX=x; if(x>maxX)maxX=x;
-            if(y<minY)minY=y; if(y>maxY)maxY=y;
+      try{
+        const NW=img.width, NH=img.height;
+        // Stage 1: detect the MCDU screen on a small copy (fast)
+        const ds=Math.min(1, 1568/Math.max(NW,NH));
+        const dw=Math.max(1,Math.round(NW*ds)), dh=Math.max(1,Math.round(NH*ds));
+        const cd=document.createElement('canvas'); cd.width=dw; cd.height=dh;
+        const cdx=cd.getContext('2d');
+        cdx.drawImage(img,0,0,dw,dh);
+        const dd=cdx.getImageData(0,0,dw,dh), dpx=dd.data;
+        const rowd=new Array(dh).fill(0), cold=new Array(dw).fill(0);
+        let hits=0, minX=dw,minY=dh,maxX=0,maxY=0;
+        for(let y=0;y<dh;y+=2){
+          for(let x=0;x<dw;x+=2){
+            const i=(y*dw+x)*4, r=dpx[i], g=dpx[i+1], b=dpx[i+2];
+            if(g>70 && g>1.25*r && g>1.1*b){
+              rowd[y]++; cold[x]++; hits++;
+              if(x<minX)minX=x; if(x>maxX)maxX=x;
+              if(y<minY)minY=y; if(y>maxY)maxY=y;
+            }
           }
         }
-      }
-      function band(dArr, gapfrac){
-        const n=dArr.length, k=7, s=new Array(n);
-        for(let i=0;i<n;i++){
-          const a=Math.max(0,i-k), b2=Math.min(n,i+k+1);
-          let sum=0; for(let j=a;j<b2;j++) sum+=dArr[j];
-          s[i]=sum/(b2-a);
-        }
-        let mx=0; for(const v of s) if(v>mx)mx=v;
-        if(mx<1) return null;
-        const th=mx*0.18, G=Math.floor(n*gapfrac);
-        const clusters=[]; let cur=null;
-        for(let i=0;i<n;i++){
-          if(s[i]>=th){
-            if(cur && i-cur.end<=G){ cur.end=i; cur.d+=dArr[i]; }
-            else{ if(cur)clusters.push(cur); cur={start:i,end:i,d:dArr[i]}; }
+        function band(dArr, gapfrac){
+          const n=dArr.length, k=7, s=new Array(n);
+          for(let i=0;i<n;i++){
+            const a=Math.max(0,i-k), b2=Math.min(n,i+k+1);
+            let sum=0; for(let j=a;j<b2;j++) sum+=dArr[j];
+            s[i]=sum/(b2-a);
           }
+          let mx=0; for(const v of s) if(v>mx)mx=v;
+          if(mx<1) return null;
+          const th=mx*0.18, G=Math.floor(n*gapfrac);
+          const clusters=[]; let cur=null;
+          for(let i=0;i<n;i++){
+            if(s[i]>=th){
+              if(cur && i-cur.end<=G){ cur.end=i; cur.d+=dArr[i]; }
+              else{ if(cur)clusters.push(cur); cur={start:i,end:i,d:dArr[i]}; }
+            }
+          }
+          if(cur)clusters.push(cur);
+          if(!clusters.length) return null;
+          let bestC=clusters[0];
+          for(const cl of clusters) if(cl.d>bestC.d) bestC=cl;
+          return [bestC.start,bestC.end];
         }
-        if(cur)clusters.push(cur);
-        if(!clusters.length) return null;
-        let best=clusters[0];
-        for(const cl of clusters) if(cl.d>best.d) best=cl;
-        return [best.start,best.end];
+        const rb=band(rowd,0.10), cb=band(cold,0.18);
+        let bx=0,by=0,bw=dw,bh=dh;
+        if(rb&&cb&&rb[1]-rb[0]>60&&cb[1]-cb[0]>60){
+          const my=Math.round((rb[1]-rb[0])*0.08), mx2=Math.round((cb[1]-cb[0])*0.08);
+          bx=Math.max(0,cb[0]-mx2); by=Math.max(0,rb[0]-my);
+          bw=Math.min(dw-bx,(cb[1]-cb[0])+2*mx2); bh=Math.min(dh-by,(rb[1]-rb[0])+2*my);
+        }else if(hits>150&&maxX>minX+40&&maxY>minY+40){
+          bx=minX; by=minY; bw=maxX-minX; bh=maxY-minY;
+        }
+        // Stage 2: map detection box to native coords, crop directly from the original
+        const inv=1/ds;
+        const sx=Math.max(0,Math.floor(bx*inv)), sy=Math.max(0,Math.floor(by*inv));
+        const sw=Math.min(NW-sx,Math.ceil(bw*inv)), sh=Math.min(NH-sy,Math.ceil(bh*inv));
+        let scale=1;
+        if(sw<1400) scale=1400/sw;
+        else if(sw>2200) scale=2200/sw;
+        const c2=document.createElement('canvas');
+        c2.width=Math.round(sw*scale); c2.height=Math.round(sh*scale);
+        const ctx2=c2.getContext('2d');
+        ctx2.imageSmoothingEnabled=true;
+        ctx2.drawImage(img, sx,sy,sw,sh, 0,0,c2.width,c2.height);
+        const d2=ctx2.getImageData(0,0,c2.width,c2.height), p2=d2.data;
+        const hist=new Array(256).fill(0);
+        const grayVals=new Array(p2.length/4);
+        for(let i=0,j=0;i<p2.length;i+=4,j++){
+          const g=Math.round(0.299*p2[i]+0.587*p2[i+1]+0.114*p2[i+2]);
+          grayVals[j]=g; hist[g]++;
+        }
+        const total=p2.length/4;
+        let sum=0; for(let v=0;v<256;v++) sum+=v*hist[v];
+        let sumB=0, wB=0, best2=0, thr=127;
+        for(let v=0;v<256;v++){
+          wB+=hist[v]; if(!wB) continue;
+          const wF=total-wB; if(!wF) break;
+          sumB+=v*hist[v];
+          const mB=sumB/wB, mF=(sum-sumB)/wF;
+          const between=wB*wF*(mB-mF)*(mB-mF);
+          if(between>best2){ best2=between; thr=v; }
+        }
+        for(let i=0,j=0;i<p2.length;i+=4,j++){
+          const v=grayVals[j]>thr ? 0 : 255;
+          p2[i]=p2[i+1]=p2[i+2]=v;
+        }
+        ctx2.putImageData(d2,0,0);
+        const binary=c2.toDataURL('image/png');
+        let lo=0, hi=255, acc=0;
+        for(let v=0;v<256;v++){ acc+=hist[v]; if(acc>total*0.02){lo=v;break;} }
+        acc=0;
+        for(let v=255;v>=0;v--){ acc+=hist[v]; if(acc>total*0.02){hi=v;break;} }
+        const range=Math.max(1,hi-lo);
+        const d3=ctx2.createImageData(c2.width,c2.height), p3=d3.data;
+        for(let i=0,j=0;i<p3.length;i+=4,j++){
+          let v=Math.max(0,Math.min(255,Math.round((grayVals[j]-lo)*255/range)));
+          v=255-v;
+          p3[i]=p3[i+1]=p3[i+2]=v; p3[i+3]=255;
+        }
+        ctx2.putImageData(d3,0,0);
+        const gray=c2.toDataURL('image/png');
+        if(objUrl) URL.revokeObjectURL(objUrl);
+        res({binary, gray});
+      }catch(err){
+        if(objUrl) URL.revokeObjectURL(objUrl);
+        rej(new Error('OCR PREPROCESS FAILED'));
       }
-      const rb=band(rowd,0.10), cb=band(cold,0.18);
-      let sx=0,sy=0,sw=W,sh=H;
-      if(rb&&cb&&rb[1]-rb[0]>60&&cb[1]-cb[0]>60){
-        const my=Math.round((rb[1]-rb[0])*0.08), mx2=Math.round((cb[1]-cb[0])*0.08);
-        sx=Math.max(0,cb[0]-mx2); sy=Math.max(0,rb[0]-my);
-        sw=Math.min(W-sx,(cb[1]-cb[0])+2*mx2); sh=Math.min(H-sy,(rb[1]-rb[0])+2*my);
-      }else if(hits>150&&maxX>minX+40&&maxY>minY+40){
-        sx=minX; sy=minY; sw=maxX-minX; sh=maxY-minY;
-      }
-
-      const scale=Math.max(1,1400/sw);
-      const c2=document.createElement('canvas');
-      c2.width=Math.round(sw*scale); c2.height=Math.round(sh*scale);
-      const ctx2=c2.getContext('2d');
-      ctx2.imageSmoothingEnabled=true;
-      ctx2.drawImage(c, sx,sy,sw,sh, 0,0,c2.width,c2.height);
-      const d2=ctx2.getImageData(0,0,c2.width,c2.height), p2=d2.data;
-      const hist=new Array(256).fill(0);
-      const grayVals=new Array(p2.length/4);
-      for(let i=0,j=0;i<p2.length;i+=4,j++){
-        const g=Math.round(0.299*p2[i]+0.587*p2[i+1]+0.114*p2[i+2]);
-        grayVals[j]=g; hist[g]++;
-      }
-      const total=p2.length/4;
-      let sum=0; for(let v=0;v<256;v++) sum+=v*hist[v];
-      let sumB=0, wB=0, best2=0, thr=127;
-      for(let v=0;v<256;v++){
-        wB+=hist[v]; if(!wB) continue;
-        const wF=total-wB; if(!wF) break;
-        sumB+=v*hist[v];
-        const mB=sumB/wB, mF=(sum-sumB)/wF;
-        const between=wB*wF*(mB-mF)*(mB-mF);
-        if(between>best2){ best2=between; thr=v; }
-      }
-      // variant A: hard Otsu binarization (inverted)
-      for(let i=0,j=0;i<p2.length;i+=4,j++){
-        const v=grayVals[j]>thr ? 0 : 255;
-        p2[i]=p2[i+1]=p2[i+2]=v;
-      }
-      ctx2.putImageData(d2,0,0);
-      const binary=c2.toDataURL('image/png');
-      // variant B: contrast-stretched grayscale (inverted, no hard threshold)
-      let lo=0, hi=255, acc=0;
-      for(let v=0;v<256;v++){ acc+=hist[v]; if(acc>total*0.02){lo=v;break;} }
-      acc=0;
-      for(let v=255;v>=0;v--){ acc+=hist[v]; if(acc>total*0.02){hi=v;break;} }
-      const range=Math.max(1,hi-lo);
-      const d3=ctx2.createImageData(c2.width,c2.height), p3=d3.data;
-      for(let i=0,j=0;i<p3.length;i+=4,j++){
-        let v=Math.max(0,Math.min(255,Math.round((grayVals[j]-lo)*255/range)));
-        v=255-v;
-        p3[i]=p3[i+1]=p3[i+2]=v; p3[i+3]=255;
-      }
-      ctx2.putImageData(d3,0,0);
-      const gray=c2.toDataURL('image/png');
-      res({binary, gray});
     };
-    img.onerror=()=>rej(new Error('OCR PREPROCESS FAILED'));
-    img.src=dataUrl;
+    img.onerror=()=>{ if(objUrl) URL.revokeObjectURL(objUrl); rej(new Error('OCR PREPROCESS FAILED')); };
+    img.src = objUrl || src;
   });
 }
 /* ===== Loose MCDU layout parser: label-free, verified against BLOCK/FLIGHT ===== */
@@ -1065,7 +1177,7 @@ function parseMCDULoose(raw){
 }
 
 let lastOCRText='';
-async function ocrExtract(dataUrls){
+async function ocrExtract(dataUrls, srcs){
   await ensureTesseract();
   status('LOADING OCR ENGINE...');
   const worker=await Tesseract.createWorker('eng');
@@ -1101,7 +1213,7 @@ async function ocrExtract(dataUrls){
   try{
     for(let i=0;i<dataUrls.length;i++){
       status('FREE OCR - PHOTO '+(i+1)+'/'+dataUrls.length+'...');
-      const pre=await preprocessForOCR(dataUrls[i]);
+      const pre=await preprocessForOCR((srcs&&srcs[i])?srcs[i]:dataUrls[i]);
       // pass 1: binarized
       const r1=await worker.recognize(pre.binary);
       lastOCRText+='--- PHOTO '+(i+1)+' (PASS 1) ---\n'+r1.data.text+'\n';
@@ -1245,7 +1357,7 @@ saveBtn.onclick=()=>{
     entries.push(rec);
   });
   store.set('oooi_entries', entries);
-  pendingLegs=[]; pendingImgs=[];
+  pendingLegs=[]; pendingImgs=[]; pendingSrcs=[];
   reviewEl.innerHTML=''; saveBtn.style.display='none';
   renderThumbs();
   camIn.value=''; camLive.value='';
@@ -1508,10 +1620,12 @@ function setBar(barId,lblId,val,max){
 }
 
 /* ================= SETTINGS + FMA ================= */
-const setType=document.getElementById('setType'), setKey=document.getElementById('setKey');
-setType.value=settings.type||''; setKey.value=settings.key||'';
+const setType=document.getElementById('setType'), setKey=document.getElementById('setKey'), setGroq=document.getElementById('setGroq'), setGemini=document.getElementById('setGemini');
+setType.value=settings.type||''; setKey.value=settings.key||''; setGroq.value=settings.groqKey||''; setGemini.value=settings.geminiKey||'';
 setType.oninput=()=>{settings.type=setType.value.trim(); store.set('oooi_settings',settings);};
 setKey.oninput=()=>{settings.key=setKey.value.trim(); store.set('oooi_settings',settings);};
+setGroq.oninput=()=>{settings.groqKey=setGroq.value.trim(); store.set('oooi_settings',settings);};
+setGemini.oninput=()=>{settings.geminiKey=setGemini.value.trim(); store.set('oooi_settings',settings);};
 
 function updateFMA(){
   const blk=entries.reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
