@@ -343,7 +343,7 @@
     </div>
 
     <button class="btn ghost" id="setToggle" style="margin-top:20px">SETTINGS</button>
-    <div class="set" id="setPanel" style="display:none;margin-top:6px">
+    <div class="set" id="setPanel" style="display:none;margin-top:6px;padding-bottom:40px">
       <label for="setType">DEFAULT AIRCRAFT TYPE</label>
       <input id="setType" placeholder="A321">
       <label>GEMINI API KEY <span id="keyState" style="color:var(--grn)"></span></label>
@@ -1636,7 +1636,10 @@ setGemini.oninput=()=>{settings.geminiKey=setGemini.value.trim(); store.set('ooo
 setToggle.onclick=()=>{
   const open=setPanel.style.display!=='none';
   setPanel.style.display=open?'none':'block';
-  if(!open) refreshKeyUI();
+  if(!open){
+    refreshKeyUI();
+    setTimeout(()=>setPanel.scrollIntoView({behavior:'smooth',block:'end'}),60);
+  }
 };
 function refreshKeyUI(){
   if(settings.geminiKey){
