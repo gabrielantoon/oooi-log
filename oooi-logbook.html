@@ -173,6 +173,24 @@
     font-size:10px;letter-spacing:1.5px;font-weight:700;
     padding:9px 16px;cursor:pointer;display:none;
   }
+  .mergediff{
+    background:#1a1e14;border:1px solid var(--amb);border-radius:4px;
+    margin:8px 16px;padding:10px;font-family:var(--mono);font-size:11px;
+    display:none;
+  }
+  .mergediff .mrow{display:flex;gap:6px;margin-bottom:6px;align-items:center}
+  .mergediff .mchk{width:18px;height:18px;accent-color:var(--grn);flex-shrink:0;cursor:pointer}
+  .mergediff .mlbl{color:var(--dim);width:45px;font-size:9px;letter-spacing:1px;flex-shrink:0}
+  .mergediff .mold{color:var(--red);text-decoration:line-through}
+  .mergediff .mnew{color:var(--grn);font-weight:700}
+  .mergediff .mfill{color:var(--cyn);font-style:italic}
+  .mergebtn{
+    display:block;width:100%;margin-top:10px;
+    background:rgba(82,224,140,0.1);border:1.5px solid var(--grn);color:var(--grn);
+    font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:3px;
+    padding:13px;border-radius:6px;cursor:pointer;
+  }
+  .mergebtn:active{background:rgba(82,224,140,0.25)}
   .leg.dupe{border-color:var(--amb)}
   #scanMsg{margin:10px 2px 0;min-height:16px}
   .ticket .tbody{padding:12px 16px 18px}
@@ -315,10 +333,11 @@
     <button class="btn ghost" id="dupeBtn">SCAN FOR DUPLICATES</button>
     <button class="btn ghost" id="purgeBtn" style="display:none;border-color:#5c2b28;color:var(--red)">REMOVE EXTRAS</button>
     <button class="btn ghost" id="csvBtn">EXPORT CSV</button>
-    <button class="btn ghost" id="backupBtn">EXPORT BACKUP (JSON)</button>
-    <button class="btn ghost" id="restoreBtn">IMPORT BACKUP FILE</button>
-    <button class="btn ghost" id="pasteBtn">IMPORT FROM PASTE</button>
-    <input type="file" id="restoreIn" accept=".json,application/json" style="display:none">
+    <button class="btn ghost" id="csvImportBtn">IMPORT CSV FILE</button>
+    <button class="btn ghost" id="pdfImportBtn">IMPORT PDF FILE</button>
+    <input type="file" id="csvImportIn" accept=".csv,text/csv" style="display:none">
+    <input type="file" id="pdfImportIn" accept=".pdf,application/pdf" style="display:none">
+    <button class="btn ghost" id="deleteAllBtn" style="border-color:#5c2b28;color:var(--red)">DELETE ALL ENTRIES</button>
   </section>
 
   <!-- ============ TOTALS ============ -->
@@ -346,6 +365,8 @@
     <div class="set" id="setPanel" style="display:none;margin-top:6px;padding-bottom:40px">
       <label for="setType">DEFAULT AIRCRAFT TYPE</label>
       <input id="setType" placeholder="A321">
+      <label for="setRole">DEFAULT ROLE</label>
+      <input id="setRole" placeholder="FO or CAPT">
       <label>GEMINI API KEY <span id="keyState" style="color:var(--grn)"></span></label>
       <div class="note" id="keyNote" style="margin:2px 0 6px">Free at aistudio.google.com - no card needed.</div>
       <button class="btn ghost" id="keyChangeBtn" style="display:none;margin-top:0">CHANGE KEY</button>
@@ -361,7 +382,6 @@
     <div class="note" style="margin-bottom:8px">If no download started (blocked in preview), copy the data below and paste it into a file.</div>
     <textarea id="expText" readonly spellcheck="false"></textarea>
     <button class="btn cyan" id="expCopy">COPY TO CLIPBOARD</button>
-    <button class="btn" id="expImport" style="display:none">IMPORT PASTED DATA</button>
   </div>
 </div>
 
@@ -385,7 +405,7 @@ const store = (()=>{
 })();
 
 let entries = store.get('oooi_entries', []);
-let settings = store.get('oooi_settings', { type:'A321', key:'', groqKey:'', geminiKey:'' });
+let settings = store.get('oooi_settings', { type:'A321', key:'', groqKey:'', geminiKey:'', role:'FO' });
 let pendingImgs = [];        // 1568px jpeg dataURLs (AI path + thumbnails), max 15/batch
 let pendingSrcs = [];        // native-resolution source blobs (free OCR path)
 let pendingLegs = [];        // parsed legs awaiting confirmation
@@ -413,11 +433,72 @@ function fmtMin(m){
   return Math.floor(m/60)+':' + String(m%60).padStart(2,'0');
 }
 function fmtDec(m){ return m==null?'':(m/60).toFixed(1); }
-function dupKey(e){
-  const flt=String(e.flt||'').replace(/\s/g,'').toUpperCase();
-  if(flt) return (e.date||'')+'|'+flt;
-  return (e.date||'')+'|'+(e.out||'')+'|'+String(e.from||'').toUpperCase()+'|'+String(e.to||'').toUpperCase();
+/* ================= AIRPORT CODE NORMALIZER ================= */
+const ICAO2IATA={
+  // Canada
+  CYUL:'YUL',CYQB:'YQB',CYYZ:'YYZ',CYOW:'YOW',CYHZ:'YHZ',CYEG:'YEG',CYYC:'YYC',CYVR:'YVR',CYQR:'YQR',CYWG:'YWG',CYQM:'YQM',CYDF:'YDF',CYQX:'YQX',CYFC:'YFC',CYSJ:'YSJ',
+  // Caribbean / Central America
+  MDPC:'PUJ',MDPP:'POP',MDCY:'AZS',MDSD:'SDQ',MKJP:'MBJ',MKJS:'KIN',MMUN:'CUN',MMTM:'TQO',MMHO:'HUX',MMMX:'MEX',MMMY:'MTY',TNCM:'SXM',TFFF:'FDF',TFFR:'PTP',TBPB:'BGI',TTPP:'POS',TNCA:'AUA',TNCB:'BON',TNCC:'CUR',MPTO:'PTY',MROC:'SJO',MHLM:'SAP',MGGT:'GUA',MUHA:'HAV',MUVR:'VRA',MYNN:'NAS',MWCR:'GCM',TJSJ:'SJU',
+  // USA
+  KFLL:'FLL',KMCO:'MCO',KJFK:'JFK',KEWR:'EWR',KLAX:'LAX',KSFO:'SFO',KORD:'ORD',KATL:'ATL',KBOS:'BOS',KMIA:'MIA',KLAS:'LAS',KPBI:'PBI',KRDU:'RDU',KPHL:'PHL',KDFW:'DFW',KIAH:'IAH',KDTW:'DTW',KMSP:'MSP',KDEN:'DEN',KSEA:'SEA',KTPA:'TPA',KBWI:'BWI',KDCA:'DCA',KIAD:'IAD',KRSW:'RSW',
+  // Europe
+  EGKK:'LGW',EGLL:'LHR',EGPF:'GLA',LFPG:'CDG',LFBD:'BOD',LFML:'MRS',LFPO:'ORY',LEBL:'BCN',LEMD:'MAD',LEPA:'PMI',LPPT:'LIS',LPFR:'FAO',LIRF:'FCO',LIMC:'MXP',LIRN:'NAP',LGAV:'ATH',LCLK:'LCA',LPPS:'PXO',EDDF:'FRA',EDDM:'MUC',EHAM:'AMS',EBCI:'BRU',LSZH:'ZRH',ENGM:'OSL',ESSA:'ARN',EKCH:'CPH',EFHK:'HEL',BIKF:'KEF',
+  // Africa
+  GMMN:'CMN',DTTA:'TUN',
+};
+function toIATA(code){
+  if(!code) return '';
+  code=String(code).toUpperCase().trim();
+  if(code.length===3) return code;
+  if(ICAO2IATA[code]) return ICAO2IATA[code];
+  // Canadian rule: CYXX → YXX
+  if(code.length===4 && code[0]==='C' && code[1]==='Y') return code.slice(1);
+  // US rule: KXXX → XXX
+  if(code.length===4 && code[0]==='K') return code.slice(1);
+  return code; // return as-is if no mapping found
 }
+function dateShift(d, days){
+  const dt=new Date(d+'T12:00:00Z');
+  dt.setUTCDate(dt.getUTCDate()+days);
+  return dt.toISOString().slice(0,10);
+}
+function dupKeys(e){
+  const keys=[];
+  const flt=String(e.flt||'').replace(/\s/g,'').toUpperCase();
+  const from=toIATA(e.from), to=toIATA(e.to);
+  const dates=[e.date||''];
+  // add ±1 day variants for UTC/local date tolerance
+  if(e.date){ dates.push(dateShift(e.date,1)); dates.push(dateShift(e.date,-1)); }
+  dates.forEach(dt=>{
+    if(flt) keys.push(dt+'|'+flt);
+    if(e.out && from && to) keys.push(dt+'|'+(e.out||'')+'|'+from+'|'+to);
+  });
+  if(!keys.length) keys.push((e.date||'')+'|'+(e.out||'')+'|'+from+'|'+to);
+  return keys;
+}
+function dupKey(e){ return dupKeys(e)[0]; }
+function dupMatch(a, b){
+  const ka=dupKeys(a), kb=dupKeys(b);
+  return ka.some(k=>kb.includes(k));
+}
+function findDupEntry(L){
+  return entries.find(e=>dupMatch(e,L));
+}
+function findDupBatch(legs, i){
+  return legs.some((o,j)=>j<i && dupMatch(o,legs[i]));
+}
+function dupKeySet(list){
+  const s=new Set();
+  list.forEach(e=>dupKeys(e).forEach(k=>s.add(k)));
+  return s;
+}
+function dupKeySetHas(s, e){
+  return dupKeys(e).some(k=>s.has(k));
+}
+function dupKeySetAdd(s, e){
+  dupKeys(e).forEach(k=>s.add(k));
+}
+
 
 /* ================= NAV ================= */
 document.querySelectorAll('nav button').forEach(b=>{
@@ -1280,7 +1361,7 @@ async function ocrExtract(dataUrls, srcs){
   const byKey={};
   const merged=[];
   for(const L of legs){
-    const k=dupKey(L);
+    const k=dupKeys(L)[0];
     if(!byKey[k]){ byKey[k]=L; merged.push(L); continue; }
     const keep=byKey[k];
     if(L._v && !keep._v){
@@ -1328,10 +1409,40 @@ function renderReview(){
   reviewEl.querySelectorAll('.dupbanner').forEach(bn=>{
     bn.onclick=()=>{
       const i=+bn.dataset.i;
-      pendingLegs[i]._save = !pendingLegs[i]._save;
-      updateTicketCalc(i);
+      const L=pendingLegs[i];
+      if(L._merge){
+        const md=document.getElementById('mdiff'+i);
+        if(md) md.style.display=md.style.display==='none'?'block':'none';
+      } else if(L._dup){
+        L._save=!L._save;
+        bn.textContent=L._save
+          ? 'DUPLICATE \u2014 WILL SAVE ANYWAY (TAP TO SKIP)'
+          : 'IDENTICAL DUPLICATE \u2014 WILL BE SKIPPED';
+      }
     };
   });
+  // delegate merge button clicks (buttons are created dynamically in updateTicketCalc)
+  reviewEl.onclick=function(e){
+    const mb=e.target.closest('.mergebtn');
+    if(!mb) return;
+    const i=+mb.dataset.i;
+    const L=pendingLegs[i];
+    if(!L||!L._merge) return;
+    const existing=entries.find(e2=>e2.id===L._merge.entryId);
+    if(!existing) return;
+    const md=document.getElementById('mdiff'+i);
+    const checked=md?[...md.querySelectorAll('.mchk:checked')].map(c=>c.dataset.f):[];
+    if(!checked.length){ mb.textContent='SELECT AT LEAST ONE FIELD'; setTimeout(()=>mb.textContent='MERGE SELECTED',1500); return; }
+    L._merge.fills.forEach(d=>{ if(checked.includes(d.f)) existing[d.f]=d.newVal; });
+    L._merge.changes.forEach(d=>{ if(checked.includes(d.f)) existing[d.f]=d.newVal; });
+    store.set('oooi_entries',entries);
+    const bn=document.getElementById('tk'+i).querySelector('.dupbanner');
+    bn.style.background='#1a7a3a';
+    bn.textContent='MERGED '+checked.length+' FIELD'+(checked.length>1?'S':'')+' \u2713';
+    if(md) md.style.display='none';
+    L._merge=null;
+    updateFMA();
+  };
   pendingLegs.forEach((_,i)=>updateTicketCalc(i));
 }
 
@@ -1342,7 +1453,8 @@ function ticketHTML(L,i){
   else if(L._v===false) badge='<span style="color:#a05a00;font-weight:700">&#9888; VERIFY TIMES</span>';
   return '<div class="ticket" id="tk'+i+'">'+
     '<div class="thead"><span>ACARS &middot; LEG '+(i+1)+'</span><span>'+badge+'</span></div>'+
-    '<div class="dupbanner" data-i="'+i+'">ALREADY IN LOGBOOK &mdash; WILL BE SKIPPED (TAP TO SAVE ANYWAY)</div>'+
+    '<div class="dupbanner" data-i="'+i+'">ALREADY IN LOGBOOK</div>'+
+    '<div class="mergediff" id="mdiff'+i+'"></div>'+
     '<div class="tbody">'+
       '<div class="trow">'+f('date','DATE (UTC)','YYYY-MM-DD')+f('flt','FLT')+f('reg','REG')+'</div>'+
       '<div class="trow">'+f('from','FROM')+f('to','TO')+f('type','TYPE')+'</div>'+
@@ -1370,23 +1482,63 @@ function updateTicketCalc(i){
     inp.classList.toggle('missing', !normT(L[k]));
   });
   // duplicate check: vs saved entries and vs earlier legs in this batch
-  const k=dupKey(L);
-  const dupSaved = entries.some(e=>dupKey(e)===k);
-  const dupBatch = pendingLegs.some((o,j)=>j<i && dupKey(o)===k);
-  L._dup = dupSaved || dupBatch;
+  const existingEntry = findDupEntry(L);
+  const dupBatch = findDupBatch(pendingLegs, i);
+  L._dup = !!(existingEntry || dupBatch);
   const bn=tk.querySelector('.dupbanner');
+  const mdiff=document.getElementById('mdiff'+i);
   bn.style.display = L._dup ? 'block' : 'none';
-  if(L._dup){
-    bn.textContent = L._save
-      ? 'DUPLICATE &mdash; WILL SAVE ANYWAY (TAP TO SKIP)'.replace('&mdash;','\u2014')
-      : 'ALREADY IN LOGBOOK \u2014 WILL BE SKIPPED (TAP TO SAVE ANYWAY)';
+  mdiff.style.display = 'none';
+  L._merge = null;
+  L._save = false;
+
+  if(existingEntry){
+    // compare fields: find fills (existing blank, new has value) and changes (both have value but differ)
+    const fields=['flt','reg','type','from','to','out','off','on','inn','role','night','remarks'];
+    const fieldLabels={flt:'FLT',reg:'REG',type:'TYPE',from:'FROM',to:'TO',out:'OUT',off:'OFF',on:'ON',inn:'IN',role:'ROLE',night:'NIGHT',remarks:'REMARKS'};
+    const fills=[], changes=[];
+    fields.forEach(f=>{
+      const oldVal=String(existingEntry[f]||'').trim();
+      const fKey = f==='inn'?'inn':f;
+      const newVal=String(L[fKey]||'').trim();
+      if(!newVal) return; // new has nothing for this field
+      if(!oldVal && newVal){ fills.push({f, oldVal, newVal}); }
+      else if(oldVal && newVal && oldVal!==newVal){ changes.push({f, oldVal, newVal}); }
+    });
+
+    if(fills.length || changes.length){
+      const defaultOn=['flt','off','on']; // only these pre-checked
+      let html='';
+      fills.forEach(d=>{
+        const chk=defaultOn.includes(d.f)?'checked':'';
+        html+='<div class="mrow"><input type="checkbox" class="mchk" data-f="'+d.f+'" data-type="fill" '+chk+'><span class="mlbl">'+fieldLabels[d.f]+'</span><span class="mfill">(empty) \u2192 '+esc(d.newVal)+'</span></div>';
+      });
+      changes.forEach(d=>{
+        const chk=defaultOn.includes(d.f)?'checked':'';
+        html+='<div class="mrow"><input type="checkbox" class="mchk" data-f="'+d.f+'" data-type="change" '+chk+'><span class="mlbl">'+fieldLabels[d.f]+'</span><span class="mold">'+esc(d.oldVal)+'</span> \u2192 <span class="mnew">'+esc(d.newVal)+'</span></div>';
+      });
+      html+='<button type="button" class="mergebtn" data-i="'+i+'">MERGE SELECTED</button>';
+      mdiff.innerHTML=html;
+      mdiff.style.display='block';
+      bn.textContent=fills.length&&!changes.length
+        ? 'DUPLICATE \u2014 '+fills.length+' FIELD'+(fills.length>1?'S':'')+' TO FILL'
+        : 'DUPLICATE \u2014 '+(fills.length+changes.length)+' DIFFERENCE'+(fills.length+changes.length>1?'S':'')+' FOUND';
+      L._merge = {entryId:existingEntry.id, fills, changes};
+    } else {
+      bn.textContent='IDENTICAL DUPLICATE \u2014 WILL BE SKIPPED';
+      mdiff.style.display='none';
+    }
+  } else if(dupBatch){
+    bn.textContent='DUPLICATE IN THIS BATCH \u2014 WILL BE SKIPPED';
   } else {
     L._save = false;
   }
 }
 
 saveBtn.onclick=()=>{
-  const toSave = pendingLegs.filter(L=>!L._dup || L._save);
+  const toSave = pendingLegs.filter(L=>(!L._dup || L._save) && !L._merged);
+  const merged = pendingLegs.filter(L=>L._dup && !L._merge && !L._save && L._merged).length
+    || pendingLegs.filter(L=>L._dup && L._merge===null && document.getElementById('mdiff'+pendingLegs.indexOf(L))===null).length;
   const skipped = pendingLegs.length - toSave.length;
   if(!toSave.length){
     status(skipped?'ALL LEGS ARE DUPLICATES - NOTHING SAVED.':'NOTHING TO SAVE.', true);
@@ -1410,7 +1562,7 @@ saveBtn.onclick=()=>{
   const staleBackup = entries.length>0 && (!settings.lastBackup || (Date.now()-settings.lastBackup)>3*86400000);
   document.getElementById('scanMsg').textContent =
     'SAVED '+toSave.length+' LEG'+(toSave.length>1?'S':'')+(skipped?' - SKIPPED '+skipped+' DUPLICATE'+(skipped>1?'S':''):'')
-    +(staleBackup?' - BACKUP RECOMMENDED: TAP EXPORT BACKUP BELOW':'');
+    +(staleBackup?' - BACKUP RECOMMENDED: TAP EXPORT CSV BELOW':'');
   updateFMA();
 };
 
@@ -1444,16 +1596,35 @@ function renderLog(){
       '<div class="bot"><span>'+esc(L.date)+'</span><span class="oooi">'+(L.out||'----')+' '+(L.off||'----')+' '+(L.on||'----')+' '+(L.inn||'----')+'</span><span>AIR '+fmtMin(air)+'</span></div>'+
       '<div class="detail">'+
         '<div class="drow">'+
+          '<div class="f"><label>FLIGHT #</label><input data-k="flt" value="'+esc(L.flt)+'"></div>'+
           '<div class="f"><label>REG</label><input data-k="reg" value="'+esc(L.reg)+'"></div>'+
           '<div class="f"><label>TYPE</label><input data-k="type" value="'+esc(L.type)+'"></div>'+
-          '<div class="f"><label>ROLE PF/PM</label><input data-k="role" value="'+esc(L.role)+'"></div>'+
         '</div>'+
         '<div class="drow">'+
+          '<div class="f"><label>FROM</label><input data-k="from" value="'+esc(L.from)+'"></div>'+
+          '<div class="f"><label>TO</label><input data-k="to" value="'+esc(L.to)+'"></div>'+
+          '<div class="f"><label>DATE</label><input data-k="date" value="'+esc(L.date)+'"></div>'+
+        '</div>'+
+        '<div class="drow">'+
+          '<div class="f"><label>OUT</label><input data-k="out" value="'+esc(L.out)+'" placeholder="HHMM"></div>'+
+          '<div class="f"><label>OFF</label><input data-k="off" value="'+esc(L.off)+'" placeholder="HHMM"></div>'+
+          '<div class="f"><label>ON</label><input data-k="on" value="'+esc(L.on)+'" placeholder="HHMM"></div>'+
+          '<div class="f"><label>IN</label><input data-k="inn" value="'+esc(L.inn)+'" placeholder="HHMM"></div>'+
+        '</div>'+
+        '<div class="drow tcalc-row" style="font-family:var(--mono);font-size:13px;gap:14px;color:var(--dim)">'+
+          '<div><span style="font-size:9px;letter-spacing:1.5px">BLOCK</span><b class="legBlk" style="color:var(--grn);font-size:16px;display:block">'+fmtMin(blk)+'</b></div>'+
+          '<div><span style="font-size:9px;letter-spacing:1.5px">AIR</span><b class="legAir" style="color:var(--grn);font-size:16px;display:block">'+fmtMin(air)+'</b></div>'+
+        '</div>'+
+        '<div class="drow">'+
+          '<div class="f"><label>ROLE PF/PM</label><input data-k="role" value="'+esc(L.role)+'"></div>'+
           '<div class="f"><label>LANDINGS</label><input data-k="ldg" value="'+esc(L.ldg)+'"></div>'+
           '<div class="f"><label>NIGHT (H:MM)</label><input data-k="night" value="'+esc(L.night)+'"></div>'+
         '</div>'+
         '<div class="drow"><div class="f"><label>REMARKS</label><input data-k="remarks" value="'+esc(L.remarks)+'"></div></div>'+
-        '<div class="rowbtns"><button class="del" data-act="del">DELETE LEG</button></div>'+
+        '<div class="rowbtns">'+
+          '<button data-act="confirm" style="border-color:var(--grn);color:var(--grn)">CONFIRM CHANGES</button>'+
+          '<button class="del" data-act="del">DELETE LEG</button>'+
+        '</div>'+
       '</div>'+
     '</div>';
   });
@@ -1464,12 +1635,40 @@ function renderLog(){
       if(e.target.tagName==='INPUT'||e.target.tagName==='BUTTON') return;
       el.classList.toggle('open');
     });
+    const pending={};
+    function getLeg(){ return entries.find(x=>x.id==el.dataset.id); }
+    function recalc(){
+      const L=getLeg(); if(!L) return;
+      const o=pending.out!=null?pending.out:L.out;
+      const f=pending.off!=null?pending.off:L.off;
+      const n=pending.on!=null?pending.on:L.on;
+      const i=pending.inn!=null?pending.inn:L.inn;
+      const blk=diffMin(o,i), air=diffMin(f,n);
+      const bEl=el.querySelector('.legBlk'), aEl=el.querySelector('.legAir');
+      if(bEl) bEl.textContent=fmtMin(blk);
+      if(aEl) aEl.textContent=fmtMin(air);
+    }
     el.querySelectorAll('input').forEach(inp=>{
       inp.oninput=()=>{
-        const L=entries.find(x=>x.id==el.dataset.id);
-        if(L){ L[inp.dataset.k]=inp.value; store.set('oooi_entries',entries); updateFMA(); }
+        pending[inp.dataset.k]=inp.value;
+        if(['out','off','on','inn'].includes(inp.dataset.k)) recalc();
+        const btn=el.querySelector('[data-act="confirm"]');
+        if(btn) btn.style.background='rgba(82,224,140,0.15)';
       };
     });
+    const confirmBtn=el.querySelector('[data-act="confirm"]');
+    confirmBtn.onclick=()=>{
+      const L=getLeg(); if(!L) return;
+      for(const k in pending) L[k]=pending[k];
+      store.set('oooi_entries',entries);
+      updateFMA();
+      confirmBtn.textContent='SAVED';
+      confirmBtn.style.background='';
+      setTimeout(()=>{
+        confirmBtn.textContent='CONFIRM CHANGES';
+        renderLog();
+      },800);
+    };
     const del=el.querySelector('[data-act="del"]');
     del.onclick=()=>{
       if(del.textContent!=='CONFIRM DELETE'){ del.textContent='CONFIRM DELETE'; return; }
@@ -1490,7 +1689,7 @@ let extraIds=[];
 dupeBtn.onclick=()=>{
   renderLog();
   const groups={};
-  entries.forEach(e=>{ const k=dupKey(e); (groups[k]=groups[k]||[]).push(e); });
+  entries.forEach(e=>{ dupKeys(e).forEach(k=>{(groups[k]=groups[k]||[]).push(e);}); });
   const dupeGroups=Object.values(groups).filter(g=>g.length>1);
   extraIds=[];
   dupeGroups.forEach(g=>g.slice(1).forEach(x=>extraIds.push(x.id)));
@@ -1556,7 +1755,8 @@ function exportFile(filename, mime, content, title){
 }
 
 /* ================= CSV ================= */
-document.getElementById('csvBtn').onclick=()=>{
+document.getElementById('csvBtn').onclick=async ()=>{
+  settings.lastBackup=Date.now(); store.set('oooi_settings',settings);
   const head='date,flight,registration,type,from,to,out,off,on,in,block_hmm,block_dec,air_hmm,air_dec,landings,night,role,remarks';
   const rows=entries.slice().sort((a,b)=>(a.date+a.out).localeCompare(b.date+b.out)).map(L=>{
     const blk=diffMin(L.out,L.inn), air=diffMin(L.off,L.on);
@@ -1564,70 +1764,283 @@ document.getElementById('csvBtn').onclick=()=>{
             fmtMin(blk),fmtDec(blk),fmtMin(air),fmtDec(air),L.ldg,L.night,L.role,
             '"'+String(L.remarks||'').replace(/"/g,'""')+'"'].join(',');
   });
-  exportFile('oooi-logbook.csv','text/csv',head+'\n'+rows.join('\n'),'CSV EXPORT');
+  const csv=head+'\n'+rows.join('\n');
+  const fname='oooi-logbook.csv';
+  if(navigator.canShare){
+    try{
+      const file=new File([csv],fname,{type:'text/csv'});
+      if(navigator.canShare({files:[file]})){
+        await navigator.share({files:[file],title:'OOOI Log CSV'});
+        return;
+      }
+    }catch(e){ if(e.name==='AbortError') return; }
+  }
+  exportFile(fname,'text/csv',csv,'CSV EXPORT');
 };
 
-/* ================= BACKUP / RESTORE ================= */
-document.getElementById('backupBtn').onclick=()=>{
-  settings.lastBackup=Date.now(); store.set('oooi_settings',settings);
-  const payload={ app:'oooi-log', version:1, exported:new Date().toISOString(),
-    entries, settings:{ type:settings.type } }; // API key deliberately excluded
-  exportFile('oooi-backup-'+new Date().toISOString().slice(0,10)+'.json',
-             'application/json', JSON.stringify(payload,null,1), 'BACKUP');
-  scanMsg.textContent='BACKUP READY ('+entries.length+' LEGS)';
-};
+/* ================= CSV IMPORT ================= */
+function parseCSVRow(line){
+  const out=[]; let cur='', inQ=false;
+  for(let i=0;i<line.length;i++){
+    const c=line[i];
+    if(c==='"'){ if(inQ&&line[i+1]==='"'){cur+='"';i++;}else inQ=!inQ; }
+    else if(c===','&&!inQ){ out.push(cur.trim()); cur=''; }
+    else cur+=c;
+  }
+  out.push(cur.trim());
+  return out;
+}
+function importCSV(text){
+  const lines=text.split(/\r?\n/).filter(l=>l.trim());
+  if(lines.length<2){ scanMsg.textContent='CSV IS EMPTY'; return; }
+  const hdr=parseCSVRow(lines[0]).map(h=>h.toLowerCase().replace(/[^a-z0-9_]/g,''));
+  function col(){
+    const names=[...arguments];
+    for(const n of names){ const i=hdr.indexOf(n); if(i>=0) return i; }
+    return -1;
+  }
+  const iDate=col('date');
+  const iFlt=col('flight','flight_number','flt','flightnumber','fltnbr');
+  const iReg=col('registration','reg','aircraft','acreg','ac_reg');
+  const iType=col('type','actype','aircraft_type','ac_type');
+  const iFrom=col('from','dep','origin','orig','departure');
+  const iTo=col('to','arr','dest','destination','arrival');
+  const iOut=col('out','off_blocks','block_off','outtime','out_utc');
+  const iOff=col('off','takeoff','take_off','offtime','off_utc');
+  const iOn=col('on','landing','land','ontime','on_utc');
+  const iIn=col('in','on_blocks','block_on','intime','in_utc');
+  const iLdg=col('landings','ldg','landing_count');
+  const iNight=col('night','night_time');
+  const iRole=col('role','pf_pm','duty','function');
+  const iRemarks=col('remarks','notes','comment','comments');
+  if(iDate<0&&iOut<0){ scanMsg.textContent='CSV MISSING DATE OR OUT COLUMN'; return; }
+  const have=dupKeySet(entries);
+  let added=0, skipped=0;
+  for(let r=1;r<lines.length;r++){
+    const f=parseCSVRow(lines[r]);
+    if(!f.length||f.every(v=>!v)) continue;
+    const v=i=>i>=0&&i<f.length?f[i].replace(/Z$/i,'').trim():'';
+    const L={
+      date: v(iDate)||new Date().toISOString().slice(0,10),
+      flt: v(iFlt), reg: v(iReg), type: v(iType)||settings.type||'',
+      from: v(iFrom).toUpperCase(), to: v(iTo).toUpperCase(),
+      out: normT(v(iOut)), off: normT(v(iOff)), on: normT(v(iOn)), inn: normT(v(iIn)),
+      ldg: v(iLdg)||1, night: v(iNight), role: v(iRole)||'PF', remarks: v(iRemarks)
+    };
+    if(!L.out&&!L.inn) continue;
+    if(dupKeySetHas(have,L)){ skipped++; continue; }
+    dupKeySetAdd(have,L);
+    entries.push(Object.assign({id:Date.now()+Math.random()},L));
+    added++;
+  }
+  store.set('oooi_entries',entries);
+  renderLog(); updateFMA();
+  scanMsg.textContent='IMPORTED '+added+' LEG'+(added!==1?'S':'')
+    +(skipped?' - SKIPPED '+skipped+' DUPLICATE'+(skipped>1?'S':''):'')
+    +' (FROM CSV)';
+}
 
-const restoreIn=document.getElementById('restoreIn');
-document.getElementById('restoreBtn').onclick=()=>restoreIn.click();
-restoreIn.onchange=e=>{
+const csvImportIn=document.getElementById('csvImportIn');
+document.getElementById('csvImportBtn').onclick=()=>csvImportIn.click();
+csvImportIn.onchange=e=>{
   const f=e.target.files[0];
   if(!f) return;
   const r=new FileReader();
-  r.onload=()=>{ mergeBackup(r.result); restoreIn.value=''; };
+  r.onload=()=>{ importCSV(r.result); csvImportIn.value=''; };
   r.readAsText(f);
 };
 
-function mergeBackup(text){
+/* ================= PDF IMPORT ================= */
+async function loadPdfJs(){
+  if(window.pdfjsLib) return;
+  await new Promise((res,rej)=>{
+    const s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs';
+    s.type='module';
+    // pdf.js 4.x is ESM - load via dynamic import instead
+    s.onerror=()=>rej(new Error('PDF.JS LOAD FAILED'));
+    s.onload=res;
+    document.head.appendChild(s);
+  });
+}
+async function extractPdfText(file){
+  if(!window.pdfjsLib){
+    const mod=await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs');
+    window.pdfjsLib=mod;
+    mod.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
+  }
+  const buf=await file.arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({data:buf,verbosity:0}).promise;
+  let text='';
+  for(let p=1;p<=pdf.numPages;p++){
+    const page=await pdf.getPage(p);
+    const tc=await page.getTextContent();
+    text+=tc.items.map(i=>i.str).join(' ')+'\n';
+  }
+  return text;
+}
+async function importPdf(file){
+  scanMsg.textContent='READING PDF...';
   try{
-    const p=JSON.parse(text);
-    const inc=Array.isArray(p)?p:(p.entries||[]);
-    if(!Array.isArray(inc)) throw 0;
-    const have=new Set(entries.map(dupKey));
-    let added=0, skipped=0;
-    inc.forEach(L=>{
-      if(!L || !L.date){ return; }
-      const k=dupKey(L);
-      if(have.has(k)){ skipped++; return; }
-      have.add(k);
-      entries.push(Object.assign({id:Date.now()+Math.random()},L));
-      added++;
-    });
-    store.set('oooi_entries',entries);
-    renderLog(); updateFMA();
-    scanMsg.textContent='IMPORTED '+added+' LEG'+(added!==1?'S':'')+(skipped?' - SKIPPED '+skipped+' DUPLICATE'+(skipped>1?'S':''):'');
+    const text=await extractPdfText(file);
+
+    // Air Transat Pilot Logbook format detection
+    if(/AIR\s*TRANSAT|Pilot\s*Logbook|DEPARTURE.*ARRIVAL.*AIRCRAFT/i.test(text)){
+      importTransatPDF(text);
+      return;
+    }
+
+    // try CSV-style parsing first (tab/comma separated tables in the PDF)
+    const csvLike=text.replace(/\t/g,',');
+    if(csvLike.includes(',')&&(csvLike.toLowerCase().includes('out')||csvLike.toLowerCase().includes('block'))){
+      importCSV(csvLike);
+      return;
+    }
+    // try the OOOI text parser
+    const legs=parseOOOIText(text);
+    if(legs.length){
+      const have=dupKeySet(entries);
+      let added=0, skipped=0;
+      legs.forEach(L=>{
+        if(!L.out&&!L.inn) return;
+        if(dupKeySetHas(have,L)){ skipped++; return; }
+        dupKeySetAdd(have,L);
+        entries.push(Object.assign({id:Date.now()+Math.random()},L));
+        added++;
+      });
+      store.set('oooi_entries',entries);
+      renderLog(); updateFMA();
+      scanMsg.textContent='IMPORTED '+added+' LEG'+(added!==1?'S':'')
+        +(skipped?' - SKIPPED '+skipped+' DUPLICATE'+(skipped>1?'S':''):'')
+        +' (FROM PDF)';
+      return;
+    }
+    // nothing found
+    resetPanelMode();
+    expTitle.textContent='PDF TEXT - NO FLIGHTS FOUND';
+    expText.value=text;
+    expPanel.style.display='flex';
+    scanMsg.textContent='NO FLIGHT DATA FOUND IN PDF';
   }catch(err){
-    scanMsg.textContent='IMPORT FAILED - NOT A VALID BACKUP';
+    scanMsg.textContent='PDF IMPORT FAILED - '+err.message;
   }
 }
 
-const expImport=document.getElementById('expImport');
-document.getElementById('pasteBtn').onclick=()=>{
-  expTitle.textContent='IMPORT - PASTE BACKUP JSON BELOW';
-  expText.value=''; expText.readOnly=false;
-  document.getElementById('expCopy').style.display='none';
-  expImport.style.display='block';
-  expPanel.style.display='flex';
-  expText.focus();
-};
-expImport.onclick=()=>{
-  mergeBackup(expText.value);
-  expPanel.style.display='none';
+function importTransatPDF(text){
+  // Match DD/MM/YY but NOT DD/MM/YYYY (headers use 4-digit years)
+  const dateRe=/(\d{2})\/(\d{2})\/(\d{2})(?!\d)/g;
+  const matches=[...text.matchAll(dateRe)];
+  if(!matches.length) return importTransatFail(text);
+
+  const skipRe=/\b(SIM|SM\d+|PPC\d*|LOE|OPC|CHECK|LOFT)\b/i;
+  const regRe=/\b(C-[A-Z]{3,4})\b/;
+  const typeMap={'321':'A321','32Q':'A321neo','333':'A330','33H':'A330neo','319':'A319','320':'A320'};
+  const legs=[];
+
+  for(let i=0;i<matches.length;i++){
+    const m=matches[i];
+    const start=m.index;
+    const end=i+1<matches.length?matches[i+1].index:text.length;
+    const block=text.slice(start,end).trim();
+
+    // skip headers, totals, page markers - only check near the start of the block
+    if(/DEPARTURE|ARRIVAL|Airport|Totals|Generated|OPERATED|315862|ANTOON|Pilot\s*Logbook/i.test(block.slice(8,80))) continue;
+    // skip sims/training: keyword OR same dep/arr airport
+    if(skipRe.test(block)) continue;
+    const quickApts=[...block.matchAll(/\b([A-Z]{3})\b/g)].map(a=>a[1])
+      .filter(a=>!/^(PIC|DAY|LND|REG|FLT|AIR|SIM|PPC|LOE|OPC|PLT)$/i.test(a));
+    if(quickApts.length>=2 && quickApts[0]===quickApts[1]) continue;
+
+    const dd=m[1], mm=m[2], yy=m[3];
+    const date='20'+yy+'-'+mm+'-'+dd;
+
+    // extract all HH:MM times
+    const times=[];
+    const tRe=/(\d{1,2}):(\d{2})/g;
+    let tm;
+    while((tm=tRe.exec(block))){
+      const h=+tm[1], min=+tm[2];
+      if(h<24&&min<60) times.push(String(h).padStart(2,'0')+String(min).padStart(2,'0'));
+    }
+    if(times.length<3) continue;
+
+    const out=times[0], inn=times[1];
+
+    // airports from the early check
+    const from=quickApts.length>=1?quickApts[0]:'';
+    const to=quickApts.length>=2?quickApts[1]:'';
+
+    const rm=block.match(regRe);
+    const reg=rm?rm[1]:'';
+
+    let type='';
+    const tym=block.match(/\b(321|32Q|333|33H|319|320)\b/);
+    if(tym) type=typeMap[tym[1]]||tym[1];
+
+    legs.push({date, flt:'', reg, type: type||settings.type||'',
+      from, to, out, off:'', on:'', inn,
+      ldg:1, night:'', role:'', remarks:''});
+  }
+
+  if(!legs.length) return importTransatFail(text);
+
+  const have=dupKeySet(entries);
+  let added=0, skipped=0;
+  legs.forEach(L=>{
+    if(dupKeySetHas(have,L)){ skipped++; return; }
+    dupKeySetAdd(have,L);
+    entries.push(Object.assign({id:Date.now()+Math.random()},L));
+    added++;
+  });
+  store.set('oooi_entries',entries);
+  renderLog(); updateFMA();
+  scanMsg.textContent='IMPORTED '+added+' LEG'+(added!==1?'S':'')
+    +(skipped?' - SKIPPED '+skipped+' DUPLICATE'+(skipped>1?'S':''):'')
+    +' (FROM TRANSAT LOGBOOK PDF)';
+}
+function importTransatFail(text){
   resetPanelMode();
+  expTitle.textContent='TRANSAT PDF TEXT - NO LEGS FOUND';
+  expText.value=text;
+  expPanel.style.display='flex';
+  scanMsg.textContent='NO FLIGHT LEGS FOUND IN TRANSAT PDF - CHECK DEBUG TEXT';
+}
+
+const pdfImportIn=document.getElementById('pdfImportIn');
+document.getElementById('pdfImportBtn').onclick=()=>pdfImportIn.click();
+pdfImportIn.onchange=e=>{
+  const f=e.target.files[0];
+  if(!f) return;
+  importPdf(f);
+  pdfImportIn.value='';
 };
+
+/* ================= DELETE ALL ================= */
+const deleteAllBtn=document.getElementById('deleteAllBtn');
+let deleteConfirm=0;
+deleteAllBtn.onclick=()=>{
+  deleteConfirm++;
+  if(deleteConfirm===1){
+    deleteAllBtn.textContent='ARE YOU SURE? TAP AGAIN TO CONFIRM';
+    setTimeout(()=>{ deleteConfirm=0; deleteAllBtn.textContent='DELETE ALL ENTRIES'; },4000);
+    return;
+  }
+  if(deleteConfirm===2){
+    deleteAllBtn.textContent='LAST CHANCE - TAP ONCE MORE TO DELETE '+entries.length+' LEGS FOREVER';
+    setTimeout(()=>{ deleteConfirm=0; deleteAllBtn.textContent='DELETE ALL ENTRIES'; },4000);
+    return;
+  }
+  entries=[];
+  store.set('oooi_entries',entries);
+  renderLog(); updateFMA();
+  scanMsg.textContent='ALL ENTRIES DELETED';
+  deleteConfirm=0;
+  deleteAllBtn.textContent='DELETE ALL ENTRIES';
+};
+
 function resetPanelMode(){
   expText.readOnly=true;
   document.getElementById('expCopy').style.display='block';
-  expImport.style.display='none';
 }
 
 /* ================= TOTALS ================= */
@@ -1672,7 +2085,10 @@ const setType=document.getElementById('setType'), setGemini=document.getElementB
       keyState=document.getElementById('keyState'), keyChangeBtn=document.getElementById('keyChangeBtn'),
       keyNote=document.getElementById('keyNote');
 setType.value=settings.type||'';
+const setRole=document.getElementById('setRole');
+setRole.value=settings.role||'';
 setType.oninput=()=>{settings.type=setType.value.trim(); store.set('oooi_settings',settings);};
+setRole.oninput=()=>{settings.role=setRole.value.trim().toUpperCase(); store.set('oooi_settings',settings);};
 setGemini.oninput=()=>{settings.geminiKey=setGemini.value.trim(); store.set('oooi_settings',settings);};
 
 setToggle.onclick=()=>{
