@@ -38,7 +38,7 @@
     font-size:15px;
     max-width:560px;
     margin:0 auto;
-    padding-bottom:90px;
+    padding-bottom:160px;
   }
 
   /* ============ HEADER (FMA style) ============ */
@@ -337,20 +337,21 @@
     <button class="btn ghost" id="pdfImportBtn">IMPORT PDF FILE</button>
     <input type="file" id="csvImportIn" accept=".csv,text/csv" style="display:none">
     <input type="file" id="pdfImportIn" accept=".pdf,application/pdf" style="display:none">
-    <button class="btn ghost" id="deleteAllBtn" style="border-color:#5c2b28;color:var(--red)">DELETE ALL ENTRIES</button>
+    <button class="btn ghost" id="deleteAllBtn" style="border-color:#5c2b28;color:var(--red);margin-bottom:60px">DELETE ALL ENTRIES</button>
   </section>
 
   <!-- ============ TOTALS ============ -->
   <section class="page" id="pg-totals">
     <div class="grid">
       <div class="stat"><div class="lbl">TOTAL BLOCK</div><div class="val" id="tBlock">0:00</div></div>
-      <div class="stat"><div class="lbl">TOTAL AIR</div><div class="val" id="tAir">0:00</div></div>
       <div class="stat"><div class="lbl">THIS MONTH</div><div class="val" id="tMonth">0:00</div></div>
       <div class="stat"><div class="lbl">THIS YEAR</div><div class="val" id="tYear">0:00</div></div>
       <div class="stat"><div class="lbl">PF BLOCK</div><div class="val" id="tPF">0:00</div></div>
       <div class="stat"><div class="lbl">PM BLOCK</div><div class="val" id="tPM">0:00</div></div>
       <div class="stat"><div class="lbl">LEGS</div><div class="val" id="tLegs">0</div></div>
       <div class="stat"><div class="lbl">LANDINGS</div><div class="val" id="tLdg">0</div></div>
+      <div class="stat"><div class="lbl">PIC TIME</div><div class="val" id="tPic">0:00</div></div>
+      <div class="stat"><div class="lbl">NIGHT TIME</div><div class="val" id="tNight">0:00</div></div>
     </div>
 
     <div class="limit">
@@ -1387,7 +1388,88 @@ async function ocrExtract(dataUrls, srcs){
   return merged;
 }
 
-/* ================= REVIEW TICKET ================= */
+/* ================= NIGHT TIME AUTO-CALCULATOR ================= */
+const APT_COORDS={
+  // Canada
+  YUL:[45.47,-73.74],YQB:[46.79,-71.39],YYZ:[43.68,-79.63],YOW:[45.32,-75.67],YHZ:[44.88,-63.51],
+  YEG:[53.31,-113.58],YYC:[51.11,-114.02],YVR:[49.19,-123.18],YWG:[49.91,-97.24],YQM:[46.11,-64.68],
+  // Caribbean
+  PUJ:[18.57,-68.36],POP:[19.76,-70.57],AZS:[19.27,-69.74],SDQ:[18.43,-69.67],MBJ:[18.50,-77.91],
+  CUN:[21.04,-86.87],TQO:[20.22,-87.43],SXM:[18.04,-63.11],FDF:[14.59,-61.00],PTP:[16.27,-61.53],
+  BGI:[13.07,-59.49],SJU:[18.44,-66.00],NAS:[25.04,-77.47],HAV:[22.99,-82.41],VRA:[23.03,-81.44],
+  PTY:[9.07,-79.38],SJO:[9.99,-84.21],GUA:[14.58,-90.53],SAP:[15.45,-87.92],
+  HUX:[15.78,-96.26],AUA:[12.50,-70.02],BON:[12.13,-68.27],CUR:[12.17,-68.96],
+  // USA
+  FLL:[26.07,-80.15],MCO:[28.43,-81.31],JFK:[40.64,-73.78],EWR:[40.69,-74.17],LAX:[33.94,-118.41],
+  SFO:[37.62,-122.38],ORD:[41.97,-87.91],ATL:[33.64,-84.43],BOS:[42.36,-71.01],MIA:[25.79,-80.29],
+  LAS:[36.08,-115.15],TPA:[27.98,-82.53],PBI:[26.68,-80.10],RSW:[26.54,-81.76],
+  // Europe
+  LGW:[51.15,-0.19],LHR:[51.47,-0.46],GLA:[55.87,-4.43],CDG:[49.01,2.55],BOD:[44.83,-0.72],
+  MRS:[43.44,5.22],ORY:[48.72,2.36],BCN:[41.30,2.08],MAD:[40.47,-3.56],PMI:[39.55,2.74],
+  LIS:[38.77,-9.13],FAO:[37.01,-7.97],FCO:[41.80,12.25],MXP:[45.63,8.72],NAP:[40.89,14.29],
+  ATH:[37.94,23.94],LCA:[34.88,33.62],FRA:[50.03,8.57],MUC:[48.35,11.79],AMS:[52.31,4.76],
+  ZRH:[47.46,8.55],OSL:[60.20,11.10],ARN:[59.65,17.94],CPH:[55.62,12.66],KEF:[63.99,-22.61],
+  // Africa
+  CMN:[33.37,-7.59],
+};
+function sunTimes(lat, lng, date){
+  // simplified NOAA solar calculator - returns {rise, set} in UTC minutes from midnight
+  const d=Math.floor((date.getTime()-Date.UTC(2000,0,1,12))/86400000);
+  const g=(357.529+0.98560028*d)%360;
+  const q=(280.459+0.98564736*d)%360;
+  const L=(q+1.915*Math.sin(g*Math.PI/180)+0.020*Math.sin(2*g*Math.PI/180))%360;
+  const e=23.439-0.00000036*d;
+  const eR=e*Math.PI/180, lR=L*Math.PI/180;
+  const RA=Math.atan2(Math.cos(eR)*Math.sin(lR),Math.cos(lR))*180/Math.PI;
+  const decl=Math.asin(Math.sin(eR)*Math.sin(lR))*180/Math.PI;
+  const dR=decl*Math.PI/180, latR=lat*Math.PI/180;
+  // civil twilight: sun center at -6 degrees
+  const cosH=(Math.sin(-6*Math.PI/180)-Math.sin(latR)*Math.sin(dR))/(Math.cos(latR)*Math.cos(dR));
+  if(cosH>1) return {rise:0,set:1440,alwaysNight:true};   // polar night
+  if(cosH<-1) return {rise:0,set:1440,alwaysDay:true};    // midnight sun
+  const H=Math.acos(cosH)*180/Math.PI;
+  const T=(d+0.5)/36525;
+  const eqt=(-7.655*Math.sin(g*Math.PI/180)+9.873*Math.sin(2*lR+3.5932)); // approx equation of time
+  const noon=720-4*lng-eqt;
+  const rise=noon-4*H, set=noon+4*H;
+  return {rise:Math.round(rise), set:Math.round(set)};
+}
+function calcNightMin(leg){
+  const from=toIATA(leg.from), to=toIATA(leg.to);
+  const cFrom=APT_COORDS[from], cTo=APT_COORDS[to];
+  if(!cFrom||!cTo) return null;
+  if(!leg.off||!leg.on) return null;
+  const offM=(+leg.off.slice(0,2))*60+(+leg.off.slice(2));
+  let onM=(+leg.on.slice(0,2))*60+(+leg.on.slice(2));
+  if(onM<offM) onM+=1440; // midnight crossing
+  const flightMin=onM-offM;
+  if(flightMin<=0) return null;
+  // date for solar calc
+  const dt=new Date((leg.date||'2026-01-01')+'T12:00:00Z');
+  const dep=sunTimes(cFrom[0],cFrom[1],dt);
+  const arr=sunTimes(cTo[0],cTo[1],dt);
+  if(dep.alwaysDay&&arr.alwaysDay) return 0;
+  if(dep.alwaysNight&&arr.alwaysNight) return flightMin;
+  // interpolate: sunset at departure, sunrise at arrival
+  const sunset=dep.set, sunrise=arr.rise;
+  let nightStart=sunset, nightEnd=sunrise;
+  if(nightEnd<nightStart) nightEnd+=1440; // sunrise next day
+  // overlap of [offM, onM] with [nightStart, nightEnd]
+  // also check shifted night window for flights crossing midnight
+  let night=0;
+  for(const shift of [0,1440,-1440]){
+    const ns=nightStart+shift, ne=nightEnd+shift;
+    const overlapStart=Math.max(offM,ns), overlapEnd=Math.min(onM,ne);
+    if(overlapEnd>overlapStart) night+=overlapEnd-overlapStart;
+  }
+  return Math.min(night,flightMin);
+}
+function autoFillNight(leg){
+  if(leg.night && String(leg.night).trim()) return; // don't overwrite manual entry
+  const n=calcNightMin(leg);
+  if(n!=null && n>0) leg.night=Math.floor(n/60)+':'+String(n%60).padStart(2,'0');
+  else if(n===0) leg.night='';
+}
 function renderReview(){
   reviewEl.innerHTML = pendingLegs.map((L,i)=>ticketHTML(L,i)).join('');
   saveBtn.style.display='block';
@@ -1547,6 +1629,7 @@ saveBtn.onclick=()=>{
   const bad = toSave.some(L=>!normT(L.out)||!normT(L.inn));
   if(bad){ status('OUT and IN are required on every leg.', true); return; }
   toSave.forEach(L=>{
+    autoFillNight(L);
     const rec = Object.assign({ id:Date.now()+Math.random() }, L, {
       out:normT(L.out), off:normT(L.off), on:normT(L.on), inn:normT(L.inn) });
     delete rec._dup; delete rec._save; delete rec._v;
@@ -1560,9 +1643,10 @@ saveBtn.onclick=()=>{
   status('');
   document.querySelector('nav button[data-pg="logbook"]').click();
   const staleBackup = entries.length>0 && (!settings.lastBackup || (Date.now()-settings.lastBackup)>3*86400000);
+    const monthlyReminder = entries.length>0 && (!settings.lastBackup || (Date.now()-settings.lastBackup)>30*86400000);
   document.getElementById('scanMsg').textContent =
     'SAVED '+toSave.length+' LEG'+(toSave.length>1?'S':'')+(skipped?' - SKIPPED '+skipped+' DUPLICATE'+(skipped>1?'S':''):'')
-    +(staleBackup?' - BACKUP RECOMMENDED: TAP EXPORT CSV BELOW':'');
+    +(monthlyReminder?' - MONTHLY BACKUP DUE: EXPORT CSV NOW':(staleBackup?' - BACKUP RECOMMENDED: TAP EXPORT CSV BELOW':''));
   updateFMA();
 };
 
@@ -1593,7 +1677,7 @@ function renderLog(){
     const blk=diffMin(L.out,L.inn), air=diffMin(L.off,L.on);
     html+='<div class="leg" data-id="'+L.id+'">'+
       '<div class="top"><span class="flt">'+(esc(L.flt)||'&mdash;')+'</span><span class="pair">'+esc(L.from)+'&rarr;'+esc(L.to)+'</span><span class="blk">'+fmtMin(blk)+'</span></div>'+
-      '<div class="bot"><span>'+esc(L.date)+'</span><span class="oooi">'+(L.out||'----')+' '+(L.off||'----')+' '+(L.on||'----')+' '+(L.inn||'----')+'</span><span>AIR '+fmtMin(air)+'</span></div>'+
+      '<div class="bot"><span>'+esc(L.date)+'</span><span class="oooi">'+(L.out||'----')+' → '+(L.inn||'----')+'</span></div>'+
       '<div class="detail">'+
         '<div class="drow">'+
           '<div class="f"><label>FLIGHT #</label><input data-k="flt" value="'+esc(L.flt)+'"></div>'+
@@ -1619,6 +1703,9 @@ function renderLog(){
           '<div class="f"><label>ROLE PF/PM</label><input data-k="role" value="'+esc(L.role)+'"></div>'+
           '<div class="f"><label>LANDINGS</label><input data-k="ldg" value="'+esc(L.ldg)+'"></div>'+
           '<div class="f"><label>NIGHT (H:MM)</label><input data-k="night" value="'+esc(L.night)+'"></div>'+
+        '</div>'+
+        '<div class="drow">'+
+          '<div class="f"><label>PIC TIME (H:MM)</label><input data-k="pic" value="'+esc(L.pic||'')+'"></div>'+
         '</div>'+
         '<div class="drow"><div class="f"><label>REMARKS</label><input data-k="remarks" value="'+esc(L.remarks)+'"></div></div>'+
         '<div class="rowbtns">'+
@@ -1757,12 +1844,12 @@ function exportFile(filename, mime, content, title){
 /* ================= CSV ================= */
 document.getElementById('csvBtn').onclick=async ()=>{
   settings.lastBackup=Date.now(); store.set('oooi_settings',settings);
-  const head='date,flight,registration,type,from,to,out,off,on,in,block_hmm,block_dec,air_hmm,air_dec,landings,night,role,remarks';
+  const head='date,flight,registration,type,from,to,out,off,on,in,block_hmm,block_dec,air_hmm,air_dec,landings,night,pic,role,remarks';
   const rows=entries.slice().sort((a,b)=>(a.date+a.out).localeCompare(b.date+b.out)).map(L=>{
     const blk=diffMin(L.out,L.inn), air=diffMin(L.off,L.on);
     return [L.date,L.flt,L.reg,L.type,L.from,L.to,L.out,L.off,L.on,L.inn,
             fmtMin(blk),fmtDec(blk),fmtMin(air),fmtDec(air),L.ldg,L.night,L.role,
-            '"'+String(L.remarks||'').replace(/"/g,'""')+'"'].join(',');
+            L.pic||'','"'+String(L.remarks||'').replace(/"/g,'""')+'"'].join(',');
   });
   const csv=head+'\n'+rows.join('\n');
   const fname='oooi-logbook.csv';
@@ -1830,6 +1917,7 @@ function importCSV(text){
     if(!L.out&&!L.inn) continue;
     if(dupKeySetHas(have,L)){ skipped++; continue; }
     dupKeySetAdd(have,L);
+    autoFillNight(L);
     entries.push(Object.assign({id:Date.now()+Math.random()},L));
     added++;
   }
@@ -1989,6 +2077,7 @@ function importTransatPDF(text){
   legs.forEach(L=>{
     if(dupKeySetHas(have,L)){ skipped++; return; }
     dupKeySetAdd(have,L);
+    autoFillNight(L);
     entries.push(Object.assign({id:Date.now()+Math.random()},L));
     added++;
   });
@@ -2050,7 +2139,6 @@ function sumRange(daysBack){
 }
 function renderTotals(){
   const blk=entries.reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
-  const air=entries.reduce((s,e)=>s+(diffMin(e.off,e.on)||0),0);
   const nowM=new Date().toISOString().slice(0,7), nowY=new Date().toISOString().slice(0,4);
   const mo=entries.filter(e=>(e.date||'').slice(0,7)===nowM).reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
   const yr=entries.filter(e=>(e.date||'').slice(0,4)===nowY).reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
@@ -2061,11 +2149,26 @@ function renderTotals(){
   document.getElementById('tPF').textContent=fmtMin(pf);
   document.getElementById('tPM').textContent=fmtMin(pm);
   document.getElementById('tBlock').textContent=fmtMin(blk);
-  document.getElementById('tAir').textContent=fmtMin(air);
   document.getElementById('tMonth').textContent=fmtMin(mo);
   document.getElementById('tYear').textContent=fmtMin(yr);
   document.getElementById('tLegs').textContent=entries.length;
   document.getElementById('tLdg').textContent=ldg;
+  // PIC time: manual field, parse H:MM or decimal
+  const pic=entries.reduce((s,e)=>{
+    const v=String(e.pic||'').trim();
+    if(!v) return s;
+    if(v.includes(':')){const p=v.split(':'); return s+(+p[0])*60+(+p[1]||0);}
+    return s+Math.round((+v||0)*60);
+  },0);
+  document.getElementById('tPic').textContent=fmtMin(pic);
+  // Night time: auto-calculated or manual override
+  const nightTotal=entries.reduce((s,e)=>{
+    const v=String(e.night||'').trim();
+    if(!v) return s;
+    if(v.includes(':')){const p=v.split(':'); return s+(+p[0])*60+(+p[1]||0);}
+    return s+Math.round((+v||0)*60);
+  },0);
+  document.getElementById('tNight').textContent=fmtMin(nightTotal);
 
   const d28=sumRange(28), d365=sumRange(365);
   setBar('b28','l28',d28,112*60);
