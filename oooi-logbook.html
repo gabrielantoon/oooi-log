@@ -346,9 +346,6 @@
       <div class="stat"><div class="lbl">TOTAL BLOCK</div><div class="val" id="tBlock">0:00</div></div>
       <div class="stat"><div class="lbl">THIS MONTH</div><div class="val" id="tMonth">0:00</div></div>
       <div class="stat"><div class="lbl">THIS YEAR</div><div class="val" id="tYear">0:00</div></div>
-      <div class="stat"><div class="lbl">PF BLOCK</div><div class="val" id="tPF">0:00</div></div>
-      <div class="stat"><div class="lbl">PM BLOCK</div><div class="val" id="tPM">0:00</div></div>
-      <div class="stat"><div class="lbl">LEGS</div><div class="val" id="tLegs">0</div></div>
       <div class="stat"><div class="lbl">LANDINGS</div><div class="val" id="tLdg">0</div></div>
       <div class="stat"><div class="lbl">PIC TIME</div><div class="val" id="tPic">0:00</div></div>
       <div class="stat"><div class="lbl">NIGHT TIME</div><div class="val" id="tNight">0:00</div></div>
@@ -2143,15 +2140,9 @@ function renderTotals(){
   const mo=entries.filter(e=>(e.date||'').slice(0,7)===nowM).reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
   const yr=entries.filter(e=>(e.date||'').slice(0,4)===nowY).reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
   const ldg=entries.reduce((s,e)=>s+(+e.ldg||0),0);
-  const roleOf=e=>String(e.role||'PF').trim().toUpperCase();
-  const pf=entries.filter(e=>roleOf(e)!=='PM').reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
-  const pm=entries.filter(e=>roleOf(e)==='PM').reduce((s,e)=>s+(diffMin(e.out,e.inn)||0),0);
-  document.getElementById('tPF').textContent=fmtMin(pf);
-  document.getElementById('tPM').textContent=fmtMin(pm);
   document.getElementById('tBlock').textContent=fmtMin(blk);
   document.getElementById('tMonth').textContent=fmtMin(mo);
   document.getElementById('tYear').textContent=fmtMin(yr);
-  document.getElementById('tLegs').textContent=entries.length;
   document.getElementById('tLdg').textContent=ldg;
   // PIC time: manual field, parse H:MM or decimal
   const pic=entries.reduce((s,e)=>{
