@@ -12,6 +12,9 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="OOOI Log">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.14.1/firebase-app-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.14.1/firebase-auth-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.14.1/firebase-firestore-compat.min.js"></script>
 <style>
   /* ============ COCKPIT TOKENS ============ */
   :root{
@@ -411,15 +414,12 @@
   <button data-pg="totals">TOTALS</button>
 </nav>
 
-<script type="module">
-/* ================= FIREBASE LOADED AT END - see bottom of script ================= */
+<script>
+/* ================= FIREBASE STUBS (replaced at bottom after app loads) ================= */
 let currentUser=null;
 let isOffline=false;
 let firebaseReady=false;
-let fbAuth,fbDb,fbDoc,fbSetDoc,fbGetDoc,GoogleAuthProvider,signInWithPopup,signInWithRedirect,signOutFn,onAuthStateChanged;
 function syncStatus(msg){const el=document.getElementById('syncStatus');if(el) el.textContent=msg;}
-async function saveToCloud(){}
-let saveTimer=null;
 function scheduleSave(){}
 /* ================= STORAGE (localStorage w/ in-memory fallback) ================= */
 const store = (()=>{
@@ -2294,45 +2294,21 @@ function updateFMA(){
 }
 updateFMA();
 
-/* ================= FIREBASE INIT (runs after all app code) ================= */
-(async function initFirebase(){
-  const loginStatus=document.querySelector('#loginOverlay p');
-  const cdns=[
-    {base:'https://esm.sh/firebase@10.14.1/',app:'app',auth:'auth',fs:'firestore'},
-    {base:'https://cdn.jsdelivr.net/npm/firebase@10.14.1/',app:'firebase-app.js',auth:'firebase-auth.js',fs:'firebase-firestore.js'},
-    {base:'https://www.gstatic.com/firebasejs/10.14.1/',app:'firebase-app.js',auth:'firebase-auth.js',fs:'firebase-firestore.js'},
-  ];
-  const signBtn=document.getElementById('googleSignIn');
+/* ================= FIREBASE INIT (compat API) ================= */
+(function initFirebase(){
+  var loginStatus=document.querySelector('#loginOverlay p');
+  var signBtn=document.getElementById('googleSignIn');
   signBtn.disabled=true;
   signBtn.style.opacity='0.4';
 
-  function importWithTimeout(url, ms){
-    return Promise.race([
-      import(url),
-      new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout after '+ms/1000+'s')),ms))
-    ]);
-  }
-
-  for(const cdn of cdns){
-    try{
-      loginStatus.textContent='Loading cloud sync ('+cdn.base.split('/')[2]+')...';
-      app=await importWithTimeout(cdn.base+cdn.app, 15000);
-      authMod=await importWithTimeout(cdn.base+cdn.auth, 15000);
-      fsMod=await importWithTimeout(cdn.base+cdn.fs, 15000);
-      break;
-    }catch(e){
-      app=null;
-      console.warn(cdn.base+' failed:',e.message);
-    }
-  }
-
-  if(!app){
-    loginStatus.innerHTML='Cloud sync unavailable — all CDN versions failed.<br><br>You can still use the app offline.';
+  if(typeof firebase==='undefined'){
+    loginStatus.innerHTML='Cloud sync unavailable \u2014 SDK failed to load.<br><br>You can still use the app offline.';
+    console.error('Firebase SDK not loaded from CDN');
     return;
   }
 
   try{
-    const firebaseApp=app.initializeApp({
+    firebase.initializeApp({
       apiKey:"AIzaSyBmnm73mFoTR1XU61cI0Y12ZsH9WUdO20w",
       authDomain:"oooi-logbook.firebaseapp.com",
       projectId:"oooi-logbook",
@@ -2340,114 +2316,100 @@ updateFMA();
       messagingSenderId:"1005083476463",
       appId:"1:1005083476463:web:950d428567b4fea5eab61a"
     });
+    var fbAuth=firebase.auth();
+    var fbDb=firebase.firestore();
+    fbDb.enablePersistence({synchronizeTabs:true}).catch(function(){});
 
-    fbAuth=authMod.getAuth(firebaseApp);
-    fbDb=fsMod.getFirestore(firebaseApp);
-    GoogleAuthProvider=authMod.GoogleAuthProvider;
-    signInWithPopup=authMod.signInWithPopup;
-    signInWithRedirect=authMod.signInWithRedirect;
-    signOutFn=authMod.signOut;
-    onAuthStateChanged=authMod.onAuthStateChanged;
-    fbDoc=fsMod.doc;
-    fbSetDoc=fsMod.setDoc;
-    fbGetDoc=fsMod.getDoc;
-
-    try{await fsMod.enableIndexedDbPersistence(fbDb);}catch(e){}
     firebaseReady=true;
+    signBtn.disabled=false;
+    signBtn.style.opacity='1';
+    loginStatus.textContent='Sign in to sync your logbook across devices.';
 
-    // rewire save/load now that firebase is ready
-    saveToCloud=async function(){
-      if(!currentUser||isOffline||!firebaseReady) return;
-      try{
-        syncStatus('SYNCING...');
-        await fbSetDoc(fbDoc(fbDb,'users',currentUser.uid),{
-          entries:JSON.parse(JSON.stringify(entries)),
-          settings:{type:settings.type,role:settings.role},
-          updatedAt:new Date().toISOString()
-        },{merge:true});
+    var saveTimer2=null;
+    function saveToCloud(){
+      if(!currentUser||isOffline) return;
+      syncStatus('SYNCING...');
+      fbDb.collection('users').doc(currentUser.uid).set({
+        entries:JSON.parse(JSON.stringify(entries)),
+        settings:{type:settings.type,role:settings.role},
+        updatedAt:new Date().toISOString()
+      },{merge:true}).then(function(){
         syncStatus('SYNCED');
-        setTimeout(()=>syncStatus(''),2000);
-      }catch(e){ syncStatus('SYNC FAILED'); console.error(e); }
-    };
+        setTimeout(function(){syncStatus('');},2000);
+      }).catch(function(e){
+        syncStatus('SYNC FAILED');
+        console.error(e);
+      });
+    }
     scheduleSave=function(){
-      if(saveTimer) clearTimeout(saveTimer);
-      saveTimer=setTimeout(saveToCloud,1500);
+      if(saveTimer2) clearTimeout(saveTimer2);
+      saveTimer2=setTimeout(saveToCloud,1500);
     };
-    const origSet=store.set.bind?store.set:store.set;
+    var origSet2=store.set;
     store.set=function(k,v){
-      origSet(k,v);
+      origSet2.call(store,k,v);
       if(k==='oooi_entries') scheduleSave();
     };
 
-    loginStatus.textContent='Sign in to sync your logbook across devices.';
-    signBtn.disabled=false;
-    signBtn.style.opacity='1';
-
-    onAuthStateChanged(fbAuth,user=>{
+    fbAuth.onAuthStateChanged(function(user){
       currentUser=user;
-      const overlay=document.getElementById('loginOverlay');
+      var overlay=document.getElementById('loginOverlay');
       if(user){
         overlay.style.display='none';
         syncStatus('SIGNED IN');
-        // load from cloud
-        (async()=>{
-          try{
-            syncStatus('LOADING...');
-            const snap=await fbGetDoc(fbDoc(fbDb,'users',currentUser.uid));
-            if(snap.exists()){
-              const data=snap.data();
-              if(data.entries&&data.entries.length){
-                const have=dupKeySet(entries);
-                let added=0;
-                data.entries.forEach(e=>{
-                  if(dupKeySetHas(have,e)) return;
-                  dupKeySetAdd(have,e);
-                  entries.push(e);
-                  added++;
-                });
-                if(!added&&data.entries.length>=entries.length) entries=data.entries;
-                store.set('oooi_entries',entries);
-              }
-              if(data.settings){
-                if(data.settings.type){settings.type=data.settings.type;}
-                if(data.settings.role){settings.role=data.settings.role;}
-                store.set('oooi_settings',settings);
-              }
-            }else if(entries.length){
-              await saveToCloud();
+        fbDb.collection('users').doc(user.uid).get().then(function(snap){
+          if(snap.exists){
+            var data=snap.data();
+            if(data.entries&&data.entries.length){
+              var have=dupKeySet(entries);
+              var added=0;
+              data.entries.forEach(function(e){
+                if(dupKeySetHas(have,e)) return;
+                dupKeySetAdd(have,e);
+                entries.push(e);
+                added++;
+              });
+              if(!added&&data.entries.length>=entries.length) entries=data.entries;
+              store.set('oooi_entries',entries);
             }
-            updateFMA();
-            syncStatus('');
-          }catch(e){ syncStatus('LOAD FAILED'); console.error(e); }
-        })();
+            if(data.settings){
+              if(data.settings.type){settings.type=data.settings.type;}
+              if(data.settings.role){settings.role=data.settings.role;}
+              store.set('oooi_settings',settings);
+            }
+          }else if(entries.length){
+            saveToCloud();
+          }
+          updateFMA();
+          syncStatus('');
+        }).catch(function(e){ syncStatus('LOAD FAILED'); console.error(e); });
       }else if(!isOffline){
         overlay.style.display='flex';
         syncStatus('');
       }
     });
+
+    document.getElementById('googleSignIn').onclick=function(){
+      var provider=new firebase.auth.GoogleAuthProvider();
+      fbAuth.signInWithRedirect(provider);
+    };
+
+    document.getElementById('signOutBtn').onclick=function(){
+      fbAuth.signOut().then(function(){ syncStatus(''); isOffline=false; });
+    };
+
   }catch(e){
     console.error('Firebase init error:',e);
     loginStatus.innerHTML='Cloud sync error: '+e.message+'<br><br>You can still use the app offline.';
   }
 })();
 
-document.getElementById('googleSignIn').onclick=()=>{
-  if(!firebaseReady){alert('Cloud sync not loaded. Use offline mode.');return;}
-  const provider=new GoogleAuthProvider();
-  // redirect is more reliable than popup on iOS/Safari
-  signInWithRedirect(fbAuth,provider).catch(e=>{
-    alert('Sign-in failed: '+e.message);
-  });
-};
-document.getElementById('offlineBtn').onclick=()=>{
+document.getElementById('offlineBtn').onclick=function(){
   isOffline=true;
   document.getElementById('loginOverlay').style.display='none';
   syncStatus('OFFLINE');
 };
-document.getElementById('signOutBtn').onclick=()=>{
-  if(!firebaseReady) return;
-  signOutFn(fbAuth).then(()=>{ syncStatus(''); isOffline=false; });
-};
+
 </script>
 </body>
 </html>
