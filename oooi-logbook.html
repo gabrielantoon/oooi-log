@@ -2422,12 +2422,9 @@ updateFMA();
 document.getElementById('googleSignIn').onclick=()=>{
   if(!firebaseReady){alert('Cloud sync not loaded. Use offline mode.');return;}
   const provider=new GoogleAuthProvider();
-  signInWithPopup(fbAuth,provider).catch(e=>{
-    if(e.code==='auth/popup-blocked'||e.code==='auth/cancelled-popup-request'){
-      signInWithRedirect(fbAuth,provider);
-    }else{
-      alert('Sign-in failed: '+e.message);
-    }
+  // redirect is more reliable than popup on iOS/Safari
+  signInWithRedirect(fbAuth,provider).catch(e=>{
+    alert('Sign-in failed: '+e.message);
   });
 };
 document.getElementById('offlineBtn').onclick=()=>{
