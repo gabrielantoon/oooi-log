@@ -2302,13 +2302,23 @@ updateFMA();
     {base:'https://cdn.jsdelivr.net/npm/firebase@10.14.1/',app:'firebase-app.js',auth:'firebase-auth.js',fs:'firebase-firestore.js'},
     {base:'https://www.gstatic.com/firebasejs/10.14.1/',app:'firebase-app.js',auth:'firebase-auth.js',fs:'firebase-firestore.js'},
   ];
+  const signBtn=document.getElementById('googleSignIn');
+  signBtn.disabled=true;
+  signBtn.style.opacity='0.4';
+
+  function importWithTimeout(url, ms){
+    return Promise.race([
+      import(url),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout after '+ms/1000+'s')),ms))
+    ]);
+  }
 
   for(const cdn of cdns){
     try{
       loginStatus.textContent='Loading cloud sync ('+cdn.base.split('/')[2]+')...';
-      app=await import(cdn.base+cdn.app);
-      authMod=await import(cdn.base+cdn.auth);
-      fsMod=await import(cdn.base+cdn.fs);
+      app=await importWithTimeout(cdn.base+cdn.app, 15000);
+      authMod=await importWithTimeout(cdn.base+cdn.auth, 15000);
+      fsMod=await importWithTimeout(cdn.base+cdn.fs, 15000);
       break;
     }catch(e){
       app=null;
@@ -2370,6 +2380,8 @@ updateFMA();
     };
 
     loginStatus.textContent='Sign in to sync your logbook across devices.';
+    signBtn.disabled=false;
+    signBtn.style.opacity='1';
 
     onAuthStateChanged(fbAuth,user=>{
       currentUser=user;
