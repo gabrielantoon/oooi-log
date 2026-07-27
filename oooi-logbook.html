@@ -2325,6 +2325,20 @@ updateFMA();
     signBtn.style.opacity='1';
     loginStatus.textContent='Sign in to sync your logbook across devices.';
 
+    // handle redirect result (runs when page loads after Google sign-in redirect)
+    fbAuth.getRedirectResult().then(function(result){
+      if(result&&result.user){
+        console.log('Redirect sign-in successful:', result.user.email);
+      }
+    }).catch(function(e){
+      console.error('Redirect error:', e);
+      if(e.code==='auth/unauthorized-domain'){
+        loginStatus.innerHTML='Domain not authorized in Firebase.<br>Add <b>gabrielantoon.github.io</b> in Firebase Console \\u2192 Auth \\u2192 Settings \\u2192 Authorized domains.';
+      }else{
+        loginStatus.textContent='Sign-in error: '+e.message;
+      }
+    });
+
     var saveTimer2=null;
     function saveToCloud(){
       if(!currentUser||isOffline) return;
@@ -2391,7 +2405,17 @@ updateFMA();
 
     document.getElementById('googleSignIn').onclick=function(){
       var provider=new firebase.auth.GoogleAuthProvider();
-      fbAuth.signInWithRedirect(provider);
+      // try popup first (works in iOS standalone mode)
+      fbAuth.signInWithPopup(provider).catch(function(e){
+        if(e.code==='auth/popup-blocked'||e.code==='auth/cancelled-popup-request'){
+          // fallback to redirect (works in regular Safari)
+          fbAuth.signInWithRedirect(provider);
+        }else if(e.code==='auth/operation-not-supported-in-this-environment'){
+          loginStatus.innerHTML='Sign-in requires Safari.<br>Open this link in Safari (not from home screen):<br><b style="color:var(--cyn);font-size:11px;word-break:break-all">'+location.href+'</b>';
+        }else{
+          loginStatus.textContent='Sign-in failed: '+e.message;
+        }
+      });
     };
 
     document.getElementById('signOutBtn').onclick=function(){
