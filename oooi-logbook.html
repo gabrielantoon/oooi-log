@@ -12,9 +12,6 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="OOOI Log">
-<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
 <style>
   /* ============ COCKPIT TOKENS ============ */
   :root{
@@ -414,21 +411,13 @@
   <button data-pg="totals">TOTALS</button>
 </nav>
 
-<script>
-/* ================= FIREBASE ================= */
-if(typeof firebase==='undefined'){
-  // SDK didn't load - show which script failed
-  document.body.innerHTML='<div style="color:#f2635a;padding:40px;font-family:monospace;font-size:14px;line-height:2">'
-    +'<b>FIREBASE SDK FAILED TO LOAD</b><br>'
-    +'Check: are you on the latest version?<br>'
-    +'1. Download the newest file from Claude<br>'
-    +'2. Upload to GitHub repo → Commit<br>'
-    +'3. Wait 2 min, then hard-refresh (Cmd+Shift+R on Mac, or close and reopen on iPhone)<br><br>'
-    +'If this persists, open your browser console (F12) and look for red errors about blocked scripts.'
-    +'</div>';
-  throw new Error('Firebase SDK not loaded');
-}
-firebase.initializeApp({
+<script type="module">
+/* ================= FIREBASE (modular SDK) ================= */
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js';
+import { getAuth, onAuthStateChanged, signInWithPopup, signInWithRedirect, GoogleAuthProvider, signOut } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js';
+import { getFirestore, doc, setDoc, getDoc, enableIndexedDbPersistence } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js';
+
+const firebaseApp=initializeApp({
   apiKey: "AIzaSyBmnm73mFoTR1XU61cI0Y12ZsH9WUdO20w",
   authDomain: "oooi-logbook.firebaseapp.com",
   projectId: "oooi-logbook",
@@ -436,9 +425,9 @@ firebase.initializeApp({
   messagingSenderId: "1005083476463",
   appId: "1:1005083476463:web:950d428567b4fea5eab61a"
 });
-const auth=firebase.auth();
-const db=firebase.firestore();
-db.enablePersistence({synchronizeTabs:true}).catch(()=>{});
+const fbAuth=getAuth(firebaseApp);
+const fbDb=getFirestore(firebaseApp);
+try{ await enableIndexedDbPersistence(fbDb); }catch(e){}
 let currentUser=null;
 let isOffline=false;
 
@@ -451,11 +440,10 @@ async function saveToCloud(){
   if(!currentUser||isOffline) return;
   try{
     syncStatus('SYNCING...');
-    const ref=db.collection('users').doc(currentUser.uid);
-    await ref.set({
+    await setDoc(doc(fbDb,'users',currentUser.uid),{
       entries:JSON.parse(JSON.stringify(entries)),
       settings:{type:settings.type,role:settings.role},
-      updatedAt:firebase.firestore.FieldValue.serverTimestamp()
+      updatedAt:new Date().toISOString()
     },{merge:true});
     syncStatus('SYNCED');
     setTimeout(()=>syncStatus(''),2000);
@@ -469,11 +457,10 @@ async function loadFromCloud(){
   if(!currentUser||isOffline) return;
   try{
     syncStatus('LOADING...');
-    const doc=await db.collection('users').doc(currentUser.uid).get();
-    if(doc.exists){
-      const data=doc.data();
+    const snap=await getDoc(doc(fbDb,'users',currentUser.uid));
+    if(snap.exists()){
+      const data=snap.data();
       if(data.entries&&data.entries.length){
-        // merge cloud entries with any local entries
         const have=dupKeySet(entries);
         let added=0;
         data.entries.forEach(e=>{
@@ -482,7 +469,6 @@ async function loadFromCloud(){
           entries.push(e);
           added++;
         });
-        // also pull cloud entries that might have updates
         if(!added && data.entries.length>=entries.length){
           entries=data.entries;
         }
@@ -494,7 +480,6 @@ async function loadFromCloud(){
         store.set('oooi_settings',settings);
       }
     } else if(entries.length){
-      // first cloud save: push local data up
       await saveToCloud();
     }
     updateFMA();
@@ -505,22 +490,19 @@ async function loadFromCloud(){
   }
 }
 
-// Debounced cloud save
 let saveTimer=null;
 function scheduleSave(){
   if(saveTimer) clearTimeout(saveTimer);
   saveTimer=setTimeout(saveToCloud,1500);
 }
 
-// Wrap store.set to also trigger cloud sync for entries
 const origStoreSet=store.set.bind(store);
 store.set=function(k,v){
   origStoreSet(k,v);
   if(k==='oooi_entries') scheduleSave();
 };
 
-// Auth state
-auth.onAuthStateChanged(user=>{
+onAuthStateChanged(fbAuth,user=>{
   currentUser=user;
   const overlay=document.getElementById('loginOverlay');
   if(user){
@@ -528,8 +510,6 @@ auth.onAuthStateChanged(user=>{
     syncStatus('SIGNED IN');
     loadFromCloud().then(()=>{
       updateFMA();
-      if(document.querySelector('nav button.on')?.dataset.pg==='logbook') renderLog();
-      if(document.querySelector('nav button.on')?.dataset.pg==='totals') renderTotals();
     });
   } else if(!isOffline){
     overlay.style.display='flex';
@@ -538,11 +518,10 @@ auth.onAuthStateChanged(user=>{
 });
 
 document.getElementById('googleSignIn').onclick=()=>{
-  const provider=new firebase.auth.GoogleAuthProvider();
-  auth.signInWithPopup(provider).catch(e=>{
-    // popup blocked on iOS: fall back to redirect
+  const provider=new GoogleAuthProvider();
+  signInWithPopup(fbAuth,provider).catch(e=>{
     if(e.code==='auth/popup-blocked'||e.code==='auth/cancelled-popup-request'){
-      auth.signInWithRedirect(provider);
+      signInWithRedirect(fbAuth,provider);
     }else{
       alert('Sign-in failed: '+e.message);
     }
@@ -556,7 +535,7 @@ document.getElementById('offlineBtn').onclick=()=>{
 };
 
 document.getElementById('signOutBtn').onclick=()=>{
-  auth.signOut().then(()=>{
+  signOut(fbAuth).then(()=>{
     syncStatus('');
     isOffline=false;
   });
