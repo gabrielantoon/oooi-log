@@ -2297,20 +2297,22 @@ updateFMA();
 /* ================= FIREBASE INIT (runs after all app code) ================= */
 (async function initFirebase(){
   const loginStatus=document.querySelector('#loginOverlay p');
-  const versions=['11.0.2','10.14.1','10.13.2','10.12.5'];
-  let app,authMod,fsMod;
+  const cdns=[
+    {base:'https://esm.sh/firebase@10.14.1/',app:'app',auth:'auth',fs:'firestore'},
+    {base:'https://cdn.jsdelivr.net/npm/firebase@10.14.1/',app:'firebase-app.js',auth:'firebase-auth.js',fs:'firebase-firestore.js'},
+    {base:'https://www.gstatic.com/firebasejs/10.14.1/',app:'firebase-app.js',auth:'firebase-auth.js',fs:'firebase-firestore.js'},
+  ];
 
-  for(const ver of versions){
+  for(const cdn of cdns){
     try{
-      loginStatus.textContent='Loading cloud sync (v'+ver+')...';
-      const base='https://www.gstatic.com/firebasejs/'+ver+'/';
-      app=await import(base+'firebase-app.js');
-      authMod=await import(base+'firebase-auth.js');
-      fsMod=await import(base+'firebase-firestore.js');
+      loginStatus.textContent='Loading cloud sync ('+cdn.base.split('/')[2]+')...';
+      app=await import(cdn.base+cdn.app);
+      authMod=await import(cdn.base+cdn.auth);
+      fsMod=await import(cdn.base+cdn.fs);
       break;
     }catch(e){
       app=null;
-      console.warn('Firebase v'+ver+' failed:',e.message);
+      console.warn(cdn.base+' failed:',e.message);
     }
   }
 
