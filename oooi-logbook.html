@@ -2326,16 +2326,22 @@ updateFMA();
     loginStatus.textContent='Sign in to sync your logbook across devices.';
 
     // handle redirect result (runs when page loads after Google sign-in redirect)
-    fbAuth.getRedirectResult().then(function(result){
+    fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).then(function(){
+      return fbAuth.getRedirectResult();
+    }).then(function(result){
       if(result&&result.user){
-        console.log('Redirect sign-in successful:', result.user.email);
+        loginStatus.textContent='Signed in as '+result.user.email+'...';
+      }else{
+        // check if already signed in from a previous session
+        var existing=fbAuth.currentUser;
+        if(existing) loginStatus.textContent='Resuming session: '+existing.email+'...';
       }
     }).catch(function(e){
-      console.error('Redirect error:', e);
+      console.error('Redirect/persistence error:', e);
       if(e.code==='auth/unauthorized-domain'){
         loginStatus.innerHTML='Domain not authorized in Firebase.<br>Add <b>gabrielantoon.github.io</b> in Firebase Console \\u2192 Auth \\u2192 Settings \\u2192 Authorized domains.';
-      }else{
-        loginStatus.textContent='Sign-in error: '+e.message;
+      }else if(e.code!=='auth/operation-not-supported-in-this-environment'){
+        loginStatus.textContent='Auth error: '+e.code+' - '+e.message;
       }
     });
 
@@ -2369,6 +2375,7 @@ updateFMA();
       currentUser=user;
       var overlay=document.getElementById('loginOverlay');
       if(user){
+        console.log('Auth state: signed in as', user.email);
         overlay.style.display='none';
         syncStatus('SIGNED IN');
         fbDb.collection('users').doc(user.uid).get().then(function(snap){
